@@ -1,6 +1,7 @@
 // The player character, drawn with canvas shapes so gear upgrades change its look.
 
-import { gearTier, ARMOR_COLORS, WEAPON_COLORS } from './data.js';
+import { gearTier, ARMOR_COLORS } from './data.js';
+import { GEM_GRADES } from './gems.js';
 
 const TAU = Math.PI * 2;
 const OUTLINE = '#1d1b2e';
@@ -8,7 +9,6 @@ const SKIN = '#ffd9b8';
 const HAIR = '#6b4226';
 
 export const SWING_TIME = 0.16;
-export const SPIN_TIME = 0.32;
 
 function ellipse(ctx, x, y, rx, ry) {
   ctx.beginPath();
@@ -26,40 +26,103 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-export function swordAngle(p) {
-  if (p.spin > 0) return p.faceAngle + (1 - p.spin / SPIN_TIME) * TAU * 1.5;
-  if (p.swing > 0) return p.swingAngle - 1.4 + (1 - p.swing / SWING_TIME) * 2.8;
-  return p.faceAngle + 0.5;
+const SWINGS = new Set(['dagger', 'sword', 'hammer']); // these swing; spear thrusts; bow/staff aim
+
+export function weaponAngle(p, cat) {
+  if (p.spin > 0) return p.faceAngle + (p.spinT || 0) * TAU * 3; // Q: 1.5 turns every 0.5s
+  if (p.swing > 0 && SWINGS.has(cat)) return p.swingAngle - 1.4 + (1 - p.swing / SWING_TIME) * 2.8;
+  if (SWINGS.has(cat)) return p.faceAngle + 0.5;
+  return p.faceAngle;
 }
 
-function drawSword(ctx, x, y, angle, tier) {
-  const len = 28 + tier * 3;
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle);
-  if (tier >= 4) {
-    ctx.shadowColor = WEAPON_COLORS[tier];
-    ctx.shadowBlur = 12;
-  }
-  ctx.fillStyle = '#5b3a1e';
-  ctx.fillRect(-8, -2.5, 10, 5);
-  ctx.fillStyle = '#e0b84a';
-  ctx.fillRect(1, -7, 4, 14);
-  ctx.fillStyle = WEAPON_COLORS[tier];
-  ctx.strokeStyle = OUTLINE;
-  ctx.lineWidth = 1.5;
+const WOOD = '#7a4b25';
+const STEEL = '#cfd6e0';
+
+function blade(ctx, from, len, half, color) {
+  ctx.fillStyle = color;
   ctx.beginPath();
-  ctx.moveTo(5, -3.5);
-  ctx.lineTo(5 + len, -3.5);
-  ctx.lineTo(12 + len, 0);
-  ctx.lineTo(5 + len, 3.5);
-  ctx.lineTo(5, 3.5);
+  ctx.moveTo(from, -half);
+  ctx.lineTo(from + len, -half);
+  ctx.lineTo(from + len + half * 2, 0);
+  ctx.lineTo(from + len, half);
+  ctx.lineTo(from, half);
   ctx.closePath();
   ctx.fill();
-  ctx.shadowBlur = 0;
   ctx.stroke();
-  ctx.fillStyle = 'rgba(255,255,255,.55)';
-  ctx.fillRect(7, -2, len - 4, 1.4);
+}
+
+// Drawn pointing along +x from the hand. Grade sets the accent color; +20 or more glows.
+function drawWeapon(ctx, x, y, angle, weapon, extend = 0) {
+  const cat = weapon ? weapon.cat : 'sword';
+  const color = GEM_GRADES[weapon ? weapon.g : 0].color;
+  const glow = weapon && weapon.up >= 20;
+  ctx.save();
+  ctx.translate(x + Math.cos(angle) * extend, y + Math.sin(angle) * extend);
+  ctx.rotate(angle);
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 1.5;
+  if (glow) {
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 12;
+  }
+  switch (cat) {
+    case 'dagger':
+      ctx.fillStyle = '#5b3a1e';
+      ctx.fillRect(-6, -2.5, 8, 5);
+      ctx.fillStyle = color;
+      ctx.fillRect(1, -5, 3, 10);
+      blade(ctx, 4, 12, 3, STEEL);
+      break;
+    case 'hammer':
+      ctx.fillStyle = WOOD;
+      ctx.fillRect(-8, -2.5, 36, 5);
+      ctx.fillStyle = '#9aa4ae';
+      ctx.fillRect(24, -11, 14, 22);
+      ctx.strokeRect(24, -11, 14, 22);
+      ctx.fillStyle = color;
+      ctx.fillRect(28, -11, 5, 22);
+      break;
+    case 'spear':
+      ctx.fillStyle = WOOD;
+      ctx.fillRect(-14, -2, 54, 4);
+      ctx.fillStyle = color;
+      ctx.fillRect(36, -4, 4, 8);
+      blade(ctx, 40, 8, 4.5, STEEL);
+      break;
+    case 'bow':
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(-6, 0, 20, -1.1, 1.1);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,255,255,.8)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(-6 + 20 * Math.cos(-1.1), 20 * Math.sin(-1.1));
+      ctx.lineTo(-6 + 20 * Math.cos(1.1), 20 * Math.sin(1.1));
+      ctx.stroke();
+      break;
+    case 'staff':
+      ctx.fillStyle = WOOD;
+      ctx.fillRect(-12, -2, 42, 4);
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 14;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(33, 0, 6.5, 0, TAU);
+      ctx.fill();
+      ctx.stroke();
+      break;
+    default: // sword
+      ctx.fillStyle = '#5b3a1e';
+      ctx.fillRect(-8, -2.5, 10, 5);
+      ctx.fillStyle = color;
+      ctx.fillRect(1, -7, 4, 14);
+      blade(ctx, 5, 30, 3.5, STEEL);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = 'rgba(255,255,255,.55)';
+      ctx.fillRect(7, -2, 26, 1.4);
+  }
   ctx.restore();
 }
 
@@ -78,9 +141,10 @@ function drawCape(ctx, x, y, fx, tier) {
 }
 
 // p: { x, y, face:{x,y}, faceAngle, moving, walkT, inv, swing, swingAngle, spin, dash }
-export function drawHero(ctx, p, gear, time) {
+// weapon: the equipped weapon item (type, grade and enhancement change how it looks)
+export function drawHero(ctx, p, gear, time, weapon) {
   const at = gearTier(gear.armor);
-  const wt = gearTier(gear.weapon);
+  const cat = weapon ? weapon.cat : 'sword';
   const x = p.x, y = p.y;
   const fx = p.face.x, fy = p.face.y;
   const back = fy < -0.3;
@@ -93,10 +157,12 @@ export function drawHero(ctx, p, gear, time) {
   ctx.fillStyle = 'rgba(0,0,0,.25)';
   ellipse(ctx, x, y + 22, 17, 6);
 
-  const ang = swordAngle(p);
+  const ang = weaponAngle(p, cat);
   const hx = x + Math.cos(ang) * 14;
   const hy = y + 6 + Math.sin(ang) * 8;
-  if (back) drawSword(ctx, hx, hy, ang, wt);
+  // spear pokes forward and back while attacking
+  const thrust = cat === 'spear' && p.swing > 0 ? Math.sin((1 - p.swing / SWING_TIME) * Math.PI) * 18 : 0;
+  if (back) drawWeapon(ctx, hx, hy, ang, weapon, thrust);
   if (at >= 3 && !back) drawCape(ctx, x, y + bob, fx, at);
 
   // feet
@@ -170,12 +236,12 @@ export function drawHero(ctx, p, gear, time) {
   }
 
   if (at >= 3 && back) drawCape(ctx, x, y + bob, fx, at);
-  if (!back) drawSword(ctx, hx, hy, ang, wt);
+  if (!back) drawWeapon(ctx, hx, hy, ang, weapon, thrust);
   ctx.restore();
 }
 
 // Draws the hero standing, scaled to fit a portrait canvas (town, smithy, icon).
-export function drawPortrait(canvas, gear, { bg = null } = {}) {
+export function drawPortrait(canvas, gear, weapon, { bg = null } = {}) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const w = canvas.clientWidth || canvas.width;
   const h = canvas.clientHeight || canvas.height;
@@ -191,6 +257,6 @@ export function drawPortrait(canvas, gear, { bg = null } = {}) {
   const s = (Math.min(w, h) / 90) * dpr;
   ctx.setTransform(s, 0, 0, s, (canvas.width - 0) / 2, canvas.height / 2 + 4 * s);
   const p = { x: 0, y: 0, face: { x: 0, y: 1 }, faceAngle: Math.PI / 2, moving: false, walkT: 0, inv: 0, swing: 0, swingAngle: 0, spin: 0, dash: null };
-  p.faceAngle = -0.6; // hold the sword up and to the right
-  drawHero(ctx, p, gear, 0);
+  p.faceAngle = -0.6; // hold the weapon up and to the right
+  drawHero(ctx, p, gear, 0, weapon);
 }

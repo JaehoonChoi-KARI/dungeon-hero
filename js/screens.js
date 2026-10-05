@@ -3,12 +3,17 @@
 import { sfx } from './audio.js';
 import {
   VERSION, WORLDS, MONSTERS, STAGE_COUNT, STAGES_PER_WORLD, SKILLS, SKILL_ORDER, PASSIVES, PASSIVE_ORDER, GEAR, GEAR_ORDER,
+  TRANSCEND_FROM, POTIONS, POTION_ORDER, POTION_MAX, WEAPON_CATS, WEAPON_UP_MAX, weaponUpCost, weaponAtk, weaponPower, equippedWeapon,
   stageInfo, computeStats, skillDesc, gearName, gearTier, xpNeed, MAX_LEVEL, fmtNum,
 } from './data.js';
 import { drawPortrait } from './hero.js';
 import { createKeyboard, keyName, GAME_KEY_ROLES } from './keyboard-view.js';
 import { input } from './input.js';
 import { listSlots, deleteSlot } from './save.js';
+import {
+  GEM_GRADES, FUSE_COUNT, FUSE_COST, findGem, freeGems, gemMods, gemText, effectText, modsText, fuseCandidates, fuse, socketsOf,
+} from './gems.js';
+import { weaponName, weaponUpText, weaponSellPrice } from './weapons.js';
 
 function h(html) {
   const t = document.createElement('template');
@@ -18,6 +23,11 @@ function h(html) {
 const kc = (label, cls = '') => `<span class="kc ${cls}">${label}</span>`;
 const isBack = code => code === 'Escape' || code === 'Backspace';
 const hintbar = parts => `<div class="hintbar">${parts.join('<i>·</i>')}</div>`;
+// Space shows the equipped weapon instead of a fixed skill.
+const catOf = (save, id) => (id === 'atk' ? equippedWeapon(save).cat : undefined);
+const skillIcon = (save, id) => (id === 'atk' ? WEAPON_CATS[equippedWeapon(save).cat].icon : SKILLS[id].icon);
+const skillTitle = (save, id) => (id === 'atk' ? `${weaponName(equippedWeapon(save))}${weaponUpText(equippedWeapon(save))}` : SKILLS[id].name);
+
 // Tapping it sends Escape to the screen (wired up in game.show).
 const backBtn = (label = '← 뒤로') => `<button class="back-btn" type="button">${label}</button>`;
 
@@ -74,6 +84,37 @@ function menu(items, { cols = 1, start = 0, onSelect, onChange, tapSelectsFirst 
         update();
       }
       return true;
+    },
+  };
+}
+
+// "Are you sure?" box on top of a screen. "No" starts selected; Esc also cancels.
+// Returns { key } for the screen to forward key presses to while it is open.
+function confirmDialog(parent, { title, text, no, yes, onYes, onClose }) {
+  const dlg = h(`
+    <div class="confirm">
+      <div class="panel confirm-panel">
+        <h2>${title}</h2>
+        <p>${text}</p>
+        <div class="list compact">
+          <div class="item"><div class="mid"><div class="name">${no}</div></div></div>
+          <div class="item danger"><div class="mid"><div class="name">${yes}</div></div></div>
+        </div>
+      </div>
+    </div>`);
+  parent.appendChild(dlg);
+  const close = () => { dlg.remove(); onClose(); };
+  const m = menu([...dlg.querySelectorAll('.item')], {
+    onSelect: k => {
+      close();
+      if (k === 1) onYes();
+      else sfx.select();
+    },
+  });
+  return {
+    key(code) {
+      if (isBack(code)) { close(); sfx.select(); }
+      else m.key(code);
     },
   };
 }
@@ -160,32 +201,18 @@ function slotsScreen(game, { start = null, deleted = 0 } = {}) {
   const askDelete = i => {
     if (!slots[i]) { sfx.denied(); return; }
     sfx.select();
-    const dlg = h(`
-      <div class="confirm">
-        <div class="panel confirm-panel">
-          <h2>🗑 슬롯 ${i + 1}을 지울까요?</h2>
-          <p>Lv ${slots[i].level} 캐릭터가 사라지고, 되돌릴 수 없어요.</p>
-          <div class="list compact">
-            <div class="item"><div class="mid"><div class="name">아니요, 그냥 둘래요</div></div></div>
-            <div class="item danger"><div class="mid"><div class="name">🗑 네, 지울래요</div></div></div>
-          </div>
-        </div>
-      </div>`);
-    el.appendChild(dlg);
-    const close = () => { dlg.remove(); confirm = null; };
-    const m = menu([...dlg.querySelectorAll('.item')], {
-      onSelect: k => {
-        close();
-        if (k === 1) {
-          deleteSlot(i + 1);
-          sfx.error();
-          game.show('slots', { start: i, deleted: i + 1 });
-        } else {
-          sfx.select();
-        }
+    confirm = confirmDialog(el, {
+      title: `🗑 슬롯 ${i + 1}을 지울까요?`,
+      text: `Lv ${slots[i].level} 캐릭터가 사라지고, 되돌릴 수 없어요.`,
+      no: '아니요, 그냥 둘래요',
+      yes: '🗑 네, 지울래요',
+      onYes: () => {
+        deleteSlot(i + 1);
+        sfx.error();
+        game.show('slots', { start: i, deleted: i + 1 });
       },
+      onClose: () => { confirm = null; },
     });
-    confirm = { key: code => { if (isBack(code)) { close(); sfx.select(); } else m.key(code); } };
   };
 
   const nav = menu(cards, {
@@ -201,7 +228,7 @@ function slotsScreen(game, { start = null, deleted = 0 } = {}) {
   return {
     el,
     mount() {
-      cards.forEach((c, i) => { if (slots[i]) drawPortrait(c.querySelector('.portrait'), slots[i].gear); });
+      cards.forEach((c, i) => { if (slots[i]) drawPortrait(c.querySelector('.portrait'), slots[i].gear, equippedWeapon(slots[i])); });
     },
     onKey(code) {
       if (confirm) { confirm.key(code); return; }
@@ -231,27 +258,38 @@ function heroCard(save) {
         <div>👟 속도 <b>${Math.round(st.speed / 2.3)}%</b></div>
         <div>💰 골드 <b>${fmtNum(save.gold)}</b></div>
       </div>
-      <div class="gear-mini">${GEAR_ORDER.map(id => `<div>${GEAR[id].icon} ${gearName(id, save.gear[id])}</div>`).join('')}</div>
+      <div class="gear-mini">
+        <div>${weaponLine(equippedWeapon(save))}</div>
+        ${GEAR_ORDER.map(id => `<div>${GEAR[id].icon} ${gearName(id, save.gear[id])}</div>`).join('')}
+      </div>
     </div>`;
 }
+
+const weaponLine = w => `${WEAPON_CATS[w.cat].icon} <b class="grade" style="color:${GEM_GRADES[w.g].color}">${weaponName(w)}</b>${weaponUpText(w)}`;
 
 function townScreen(game) {
   const s = game.save;
   const next = Math.min(STAGE_COUNT - 1, s.cleared + 1);
+  const newGems = s.gems.filter(g => g.id > s.gemSeenId).length;
+  const newWeapons = s.weapons.filter(w => w.id > s.weaponSeenId).length;
   const items = [
     { icon: '⚔️', name: '모험 떠나기', sub: `다음 스테이지 ${stageInfo(next).label}`, go: () => game.show('stages') },
-    { icon: '🔨', name: '대장간', sub: '골드로 장비를 강화해요', go: () => game.show('smithy') },
+    { icon: WEAPON_CATS[equippedWeapon(s).cat].icon, name: '무기', sub: newWeapons ? `새 무기 ${newWeapons}개!` : `무기 ${s.weapons.length}개 · 바꿔 들 수 있어요`, badge: newWeapons, go: () => game.show('weapons') },
+    { icon: '🔨', name: '대장간', sub: '골드로 무기와 장비를 강화해요', go: () => game.show('smithy') },
+    { icon: '🧪', name: '물약 상점', sub: `체력 물약 ${s.potions.hp}개 · 힘의 물약 ${s.potions.atk}개`, go: () => game.show('potions') },
     { icon: '✨', name: '스킬', sub: s.sp > 0 ? `스킬 포인트 ${s.sp}개를 쓸 수 있어요!` : '스킬을 강하게 만들어요', badge: s.sp, go: () => game.show('skills') },
+    { icon: '💎', name: '보석', sub: newGems ? `새 보석 ${newGems}개!` : `보석 ${s.gems.length}개 · 무기와 스킬에 끼워요`, badge: newGems, go: () => game.show('gems') },
     { icon: '⌨️', name: '키보드 연습장', sub: '키 위치를 익혀요', go: () => game.show('guide') },
-    { icon: game.prefs.sound ? '🔊' : '🔇', name: `소리: ${game.prefs.sound ? '켜짐' : '꺼짐'}`, sub: '눌러서 바꾸기', go: () => { game.setSound(!game.prefs.sound); game.show('town'); } },
     { icon: '🚪', name: '저장하고 나가기', sub: '처음 화면으로 돌아가요', go: () => game.exitToTitle() },
   ];
+  const toggleSound = () => { game.setSound(!game.prefs.sound); game.show('town'); };
   const el = h(`
     <div class="screen town">
       <div class="panel town-panel">
         ${heroCard(s)}
         <div class="town-menu">
-          <h2>🏰 마을 <small class="slot-tag">슬롯 ${game.slot ?? '-'}</small></h2>
+          <h2>🏰 마을 <small class="slot-tag">슬롯 ${game.slot ?? '-'}</small>
+            <button class="sound-btn" type="button">${game.prefs.sound ? '🔊 소리 켜짐' : '🔇 소리 꺼짐'}<span class="kbd-only"> (M)</span></button></h2>
           <div class="list">
             ${items.map(it => `
               <div class="item">
@@ -262,17 +300,21 @@ function townScreen(game) {
           </div>
         </div>
       </div>
-      ${hintbar([`${kc('↑')}${kc('↓')} 고르기`, `${kc('Enter')} 결정`])}
+      ${hintbar([`${kc('↑')}${kc('↓')} 고르기`, `${kc('Enter')} 결정`, `${kc('M')} 소리`])}
     </div>`);
   const nav = menu([...el.querySelectorAll('.item')], {
     start: game.townIndex,
     onChange: i => { game.townIndex = i; },
     onSelect: i => { sfx.confirm(); items[i].go(); },
   });
+  el.querySelector('.sound-btn').addEventListener('click', toggleSound);
   return {
     el,
-    mount() { drawPortrait(el.querySelector('.portrait'), s.gear); },
-    onKey(code) { nav.key(code); },
+    mount() { drawPortrait(el.querySelector('.portrait'), s.gear, equippedWeapon(s)); },
+    onKey(code) {
+      if (code === 'KeyM') { toggleSound(); return; }
+      nav.key(code);
+    },
   };
 }
 
@@ -360,47 +402,63 @@ function smithyScreen(game) {
         <div class="shop-head"><h2>🔨 대장간</h2><div class="gold-chip"></div></div>
         <div class="shop-body">
           <div class="portrait-box"><canvas class="portrait"></canvas><p>5단계마다<br>모습이 바뀌어요!</p></div>
-          <div class="list">${GEAR_ORDER.map(() => '<div class="item"></div>').join('')}</div>
+          <div class="list">${['weapon', ...GEAR_ORDER].map(() => '<div class="item"></div>').join('')}</div>
         </div>
         <div class="msg"></div>
       </div>
       ${hintbar([`${kc('↑')}${kc('↓')} 고르기`, `${kc('Enter')} 강화하기`, `${kc('Esc')} 뒤로`])}
     </div>`);
   const rows = [...el.querySelectorAll('.item')];
+  // First row: the equipped weapon (its enhancement stays with that weapon). Then armor, boots, ring.
+  const entries = () => {
+    const w = equippedWeapon(s);
+    return [
+      {
+        icon: WEAPON_CATS[w.cat].icon, label: `${weaponName(w)}${weaponUpText(w)}`, slot: '장착한 무기', n: w.up, max: WEAPON_UP_MAX,
+        cost: weaponUpCost(w.up), effect: n => `공격력 +${w.atk + weaponAtk(n)}`, note: ' (이 무기에만)',
+        raise: () => { w.up++; }, nameAt: () => `${weaponName(w)}${weaponUpText(w)}`, changes: false,
+      },
+      ...GEAR_ORDER.map(id => ({
+        icon: GEAR[id].icon, label: gearName(id, s.gear[id]), slot: GEAR[id].slot, n: s.gear[id], max: GEAR[id].max,
+        cost: GEAR[id].cost(s.gear[id]), effect: GEAR[id].effect, note: '',
+        raise: () => { s.gear[id]++; }, nameAt: () => gearName(id, s.gear[id]), changes: id === 'armor',
+      })),
+    ];
+  };
   const render = () => {
     el.querySelector('.gold-chip').textContent = `💰 ${fmtNum(s.gold)}`;
-    GEAR_ORDER.forEach((id, i) => {
-      const g = GEAR[id], n = s.gear[id], max = n >= g.max;
-      const cost = g.cost(n);
+    entries().forEach((it, i) => {
+      const max = it.n >= it.max;
       rows[i].innerHTML = `
-        <div class="ico">${g.icon}</div>
+        <div class="ico">${it.icon}</div>
         <div class="mid">
-          <div class="name">${gearName(id, n)} <small>${g.slot} ${n}/${g.max}</small></div>
-          <div class="desc">${max ? g.effect(n) + ' (최고 단계!)' : `${g.effect(n)} → <b>${g.effect(n + 1)}</b>`}</div>
+          <div class="name">${it.label} <small>${it.slot} ${it.n}/${it.max}</small></div>
+          <div class="desc">${max ? it.effect(it.n) + ' (최고 단계!)' : `${it.effect(it.n)} → <b>${it.effect(it.n + 1)}</b>${it.note}`}</div>
         </div>
-        <div class="cost ${max ? 'max' : s.gold >= cost ? '' : 'poor'}">${max ? 'MAX' : `💰 ${fmtNum(cost)}`}</div>`;
+        <div class="cost ${max ? 'max' : s.gold >= it.cost ? '' : 'poor'}">${max ? 'MAX' : `💰 ${fmtNum(it.cost)}`}</div>`;
     });
-    drawPortrait(el.querySelector('.portrait'), s.gear);
+    drawPortrait(el.querySelector('.portrait'), s.gear, equippedWeapon(s));
   };
   const nav = menu(rows, {
     onSelect: i => {
-      const id = GEAR_ORDER[i], g = GEAR[id], n = s.gear[id];
-      if (n >= g.max) { sfx.denied(); message(el, '이미 최고 단계예요!'); return; }
-      const cost = g.cost(n);
-      if (s.gold < cost) {
+      const it = entries()[i], n = it.n;
+      if (n >= it.max) { sfx.denied(); message(el, '이미 최고 단계예요!'); return; }
+      if (s.gold < it.cost) {
         sfx.error();
         shake(rows[i]);
-        message(el, `골드가 ${fmtNum(cost - s.gold)} 부족해요. 모험을 떠나서 모아 와요!`, true);
+        message(el, `골드가 ${fmtNum(it.cost - s.gold)} 부족해요. 모험을 떠나서 모아 와요!`, true);
         return;
       }
-      s.gold -= cost;
-      s.gear[id] = n + 1;
+      s.gold -= it.cost;
+      it.raise();
       game.persist();
       sfx.upgrade();
       render();
       pulse(rows[i]);
-      const changed = (id === 'weapon' || id === 'armor') && gearTier(n + 1) !== gearTier(n);
-      message(el, changed ? `✨ ${gearName(id, n + 1)}(으)로 변신했어요!` : `강화 성공! ${gearName(id, n + 1)}`);
+      const changed = it.changes && gearTier(n + 1) !== gearTier(n);
+      const transcend = n + 1 === TRANSCEND_FROM + 1;
+      message(el, transcend ? '✦ 초월 강화! 이제 한계를 넘어 계속 강해질 수 있어요'
+        : changed ? `✨ ${it.nameAt()}(으)로 변신했어요!` : `강화 성공! ${it.nameAt()}`);
     },
   });
   return {
@@ -430,6 +488,8 @@ function skillsScreen(game) {
       ${hintbar([`${kc('↑')}${kc('↓')} 고르기`, `${kc('Enter')} 스킬 올리기`, `${kc('Esc')} 뒤로`])}
     </div>`);
   const rows = [...el.querySelectorAll('.item')];
+  const mods = gemMods(s);
+  const gemBonus = Object.fromEntries(SKILL_ORDER.map(id => [id, modsText(mods[id])]));
   const render = () => {
     el.querySelector('.gold-chip').textContent = `✨ 스킬 포인트 ${s.sp}`;
     ids.forEach((id, i) => {
@@ -439,12 +499,13 @@ function skillsScreen(game) {
         const locked = lv <= 0;
         rows[i].classList.toggle('locked', locked);
         rows[i].innerHTML = `
-          <div class="ico">${sk.icon}</div>
+          <div class="ico">${skillIcon(s, id)}</div>
           <div class="keycol">${kc(sk.label, sk.label === 'Space' ? 'wide' : '')}</div>
           <div class="mid">
             <div class="name">${sk.name} <small>${locked ? `🔒 Lv ${sk.unlock}에 배워요` : `Lv ${lv}/${sk.max}`}</small></div>
-            <div class="desc">${skillDesc(id, Math.max(1, lv))}</div>
-            ${!locked && lv < sk.max ? `<div class="next">다음 단계: ${skillDesc(id, lv + 1)}</div>` : ''}
+            <div class="desc">${skillDesc(id, Math.max(1, lv), undefined, catOf(s, id))}</div>
+            ${!locked && lv < sk.max ? `<div class="next">다음 단계: ${skillDesc(id, lv + 1, undefined, catOf(s, id))}</div>` : ''}
+            ${!locked && gemBonus[id] ? `<div class="next gem-bonus">💎 보석 효과: ${gemBonus[id]}</div>` : ''}
           </div>
           <div class="cost ${locked || lv >= sk.max ? 'max' : s.sp > 0 ? '' : 'poor'}">${locked ? '🔒' : lv >= sk.max ? 'MAX' : '✨ 1'}</div>`;
       } else {
@@ -489,6 +550,477 @@ function skillsScreen(game) {
 
 // ---------------------------------------------------------------------------
 
+// Left: every weapon (equipped first). Right: the selected one with equip / sell.
+function weaponsScreen(game) {
+  const s = game.save;
+  const seenBefore = s.weaponSeenId;
+  s.weaponSeenId = s.nextWeaponId - 1; // clears the "new weapons" badge in town
+  game.persist();
+  const el = h(`
+    <div class="screen weapons">
+      ${backBtn()}
+      <div class="panel gems-panel">
+        <div class="shop-head"><h2>🗡️ 무기</h2><div class="gold-chip"></div></div>
+        <div class="gems-body">
+          <div class="pick-list weapon-list"></div>
+          <div class="gem-side"></div>
+        </div>
+        <div class="msg"></div>
+      </div>
+      ${hintbar([`${kc('↑')}${kc('↓')} 고르기`, `${kc('Enter')} 장착하기`, `${kc('X')} 팔기`, `${kc('Esc')} 뒤로`])}
+    </div>`);
+  const listEl = el.querySelector('.weapon-list');
+  const side = el.querySelector('.gem-side');
+  let selId = s.weaponId, confirm = null;
+
+  const sorted = () => [...s.weapons].sort((a, b) =>
+    (b.id === s.weaponId) - (a.id === s.weaponId) || weaponPower(b) - weaponPower(a) || b.g - a.g || b.id - a.id);
+  const selected = () => s.weapons.find(w => w.id === selId) || equippedWeapon(s);
+  const socketIcons = w => w.sockets.map(gid => {
+    const gem = findGem(s, gid);
+    return gem ? gemIcon(gem, 'mini') : '<span class="gem-empty"></span>';
+  }).join('');
+
+  function render() {
+    el.querySelector('.gold-chip').textContent = `🗡️ ${s.weapons.length}개 · 💰 ${fmtNum(s.gold)}`;
+    const cur = equippedWeapon(s);
+    listEl.innerHTML = sorted().map(w => `
+      <div class="pick-row weapon-row${w.id === selId ? ' sel' : ''}" data-id="${w.id}">
+        <span class="w-ico">${WEAPON_CATS[w.cat].icon}</span>
+        <div class="pick-mid">
+          <div>${gradeTag(w)} ${WEAPON_CATS[w.cat].name}${weaponUpText(w)} <small>Lv ${w.lv}</small>
+            ${w.id === s.weaponId ? '<span class="tag on">장착 중</span>' : ''}${w.id > seenBefore ? '<span class="tag new">NEW</span>' : ''}</div>
+          <div class="w-sub">공격력 ${weaponPower(w)}${w.fx.length ? ` · ${gemText(w)}` : ''}</div>
+        </div>
+        <div class="w-sockets">${socketIcons(w)}</div>
+      </div>`).join('');
+    const w = selected();
+    const diff = weaponPower(w) - weaponPower(cur);
+    const equipped = w.id === s.weaponId;
+    side.innerHTML = `
+      <div class="weapon-card" style="--gc:${GEM_GRADES[w.g].color}">
+        <span class="w-big">${WEAPON_CATS[w.cat].icon}</span>
+        <div>
+          <div class="side-title">${gradeTag(w)} ${WEAPON_CATS[w.cat].name}${weaponUpText(w)}</div>
+          <div class="side-sub">아이템 레벨 ${w.lv} · 공격력 <b>${weaponPower(w)}</b>${w.up ? ` (기본 ${w.atk} + 강화 ${weaponAtk(w.up)})` : ''}</div>
+          ${equipped ? '<div class="side-sub on">지금 들고 있는 무기예요</div>'
+            : `<div class="side-sub ${diff >= 0 ? 'up' : 'down'}">지금 무기보다 공격력 ${diff >= 0 ? '+' : ''}${diff}</div>`}
+        </div>
+      </div>
+      <p class="tip">${kc('Space')} ${WEAPON_CATS[w.cat].desc}</p>
+      <div class="side-sub">추가 효과: ${w.fx.length ? w.fx.map(effectText).join(' · ') : '없음'}</div>
+      <div class="side-sub">보석 칸: ${socketIcons(w)}</div>
+      <p class="tip">강화는 이 무기에만 적용돼요 (대장간)</p>
+      ${equipped ? '' : `
+        <div class="btn-row">
+          <button class="btn primary equip" type="button">⚔️ 장착하기</button>
+          <button class="btn sell-w" type="button">💰 ${fmtNum(weaponSellPrice(w))}에 팔기</button>
+        </div>`}`;
+    listEl.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
+  }
+
+  function equip() {
+    const w = selected();
+    if (w.id === s.weaponId) { sfx.denied(); message(el, '이미 들고 있는 무기예요'); return; }
+    s.weaponId = w.id;
+    game.persist();
+    sfx.upgrade();
+    message(el, `${weaponName(w)}을(를) 들었어요!`);
+    render();
+  }
+
+  function askSell() {
+    const w = selected();
+    if (w.id === s.weaponId) { sfx.denied(); message(el, '들고 있는 무기는 팔 수 없어요', true); return; }
+    const price = weaponSellPrice(w);
+    const gemsIn = w.sockets.filter(Boolean).length;
+    sfx.select();
+    confirm = confirmDialog(el, {
+      title: `💰 ${weaponName(w)}을(를) 팔까요?`,
+      text: [
+        `공격력 ${weaponPower(w)} · 💰 ${fmtNum(price)}골드를 받아요`,
+        w.up ? `강화 +${w.up}도 함께 사라져요` : '',
+        gemsIn ? `끼워 둔 보석 ${gemsIn}개는 가방으로 돌아와요` : '',
+      ].filter(Boolean).join('<br>'),
+      no: '아니요, 가지고 있을래요',
+      yes: `💰 ${fmtNum(price)}골드에 팔기`,
+      onYes: () => {
+        s.weapons = s.weapons.filter(x => x !== w); // its sockets go with it, so the gems become free
+        s.gold += price;
+        selId = s.weaponId;
+        game.persist();
+        sfx.coin();
+        message(el, `💰 ${fmtNum(price)}골드를 받았어요`);
+        render();
+      },
+      onClose: () => { confirm = null; },
+    });
+  }
+
+  listEl.addEventListener('click', e => {
+    const row = e.target.closest('.weapon-row');
+    if (!row) return;
+    const id = +row.dataset.id;
+    if (id === selId && game.inputMode !== 'touch') { equip(); return; }
+    selId = id;
+    sfx.select();
+    render();
+  });
+  side.addEventListener('click', e => {
+    if (e.target.closest('.equip')) equip();
+    else if (e.target.closest('.sell-w')) askSell();
+  });
+
+  return {
+    el,
+    mount: render,
+    onKey(code) {
+      if (confirm) { confirm.key(code); return; }
+      if (isBack(code)) { sfx.select(); game.show('town'); return; }
+      const list = sorted();
+      const i = list.findIndex(w => w.id === selId);
+      if (code === 'ArrowDown' || code === 'ArrowUp') {
+        selId = list[(i + (code === 'ArrowDown' ? 1 : list.length - 1)) % list.length].id;
+        sfx.select();
+        render();
+      } else if (code === 'Enter' || code === 'Space') equip();
+      else if (code === 'KeyX' || code === 'Delete') askSell();
+    },
+  };
+}
+
+function potionsScreen(game) {
+  const s = game.save;
+  const el = h(`
+    <div class="screen potions">
+      ${backBtn()}
+      <div class="panel shop-panel">
+        <div class="shop-head"><h2>🧪 물약 상점</h2><div class="gold-chip"></div></div>
+        <div class="list">${POTION_ORDER.map(() => '<div class="item"></div>').join('')}</div>
+        <div class="kb-holder"></div>
+        <p class="tip kbd-only">싸우는 중에 숫자 ${kc('1')} ${kc('2')} 키를 누르면 마셔요</p>
+        <p class="tip touch-only">싸우는 중에 화면 오른쪽 위 물약 버튼을 누르면 마셔요</p>
+        <div class="msg"></div>
+      </div>
+      ${hintbar([`${kc('↑')}${kc('↓')} 고르기`, `${kc('Enter')} 1개 사기`, `${kc('Esc')} 뒤로`])}
+    </div>`);
+  const rows = [...el.querySelectorAll('.item')];
+  const kb = createKeyboard({ compact: true, roles: { Digit1: 'item', Digit2: 'item' } });
+  el.querySelector('.kb-holder').appendChild(kb.el);
+  const render = () => {
+    el.querySelector('.gold-chip').textContent = `💰 ${fmtNum(s.gold)}`;
+    POTION_ORDER.forEach((id, i) => {
+      const p = POTIONS[id], have = s.potions[id], price = p.price(s.level), full = have >= POTION_MAX;
+      rows[i].innerHTML = `
+        <div class="ico">${p.icon}</div>
+        <div class="keycol">${kc(p.label)}</div>
+        <div class="mid"><div class="name">${p.name} <small>${have} / ${POTION_MAX}개</small></div><div class="desc">${p.desc}</div></div>
+        ${full ? '' : `<button class="fill" type="button" data-i="${i}">가득 채우기</button>`}
+        <div class="cost ${full ? 'max' : s.gold >= price ? '' : 'poor'}">${full ? '가득!' : `💰 ${fmtNum(price)}`}</div>`;
+    });
+  };
+  const buy = (i, n) => {
+    const id = POTION_ORDER[i], p = POTIONS[id], price = p.price(s.level);
+    const room = POTION_MAX - s.potions[id];
+    if (room <= 0) { sfx.denied(); message(el, `더는 들 수 없어요 (최대 ${POTION_MAX}개)`); return; }
+    const count = Math.min(n, room, Math.floor(s.gold / price));
+    if (count <= 0) { sfx.error(); shake(rows[i]); message(el, `골드가 ${fmtNum(price - s.gold)} 부족해요`, true); return; }
+    s.gold -= count * price;
+    s.potions[id] += count;
+    game.persist();
+    sfx.coin();
+    render();
+    pulse(rows[i]);
+    message(el, `${p.name} ${count}개를 샀어요`);
+  };
+  const nav = menu(rows, { onSelect: i => buy(i, 1) });
+  // "fill up" sits inside a row; catch it before the row's own "buy one" click
+  el.addEventListener('click', e => {
+    const fill = e.target.closest('.fill');
+    if (!fill) return;
+    e.stopPropagation();
+    buy(+fill.dataset.i, POTION_MAX);
+  }, true);
+  return {
+    el,
+    mount: render,
+    onKey(code) {
+      if (isBack(code)) { sfx.select(); game.show('town'); return; }
+      nav.key(code);
+    },
+  };
+}
+
+const gemIconG = (grade, cls = '') => `<span class="gem-ico ${cls}" style="--gc:${GEM_GRADES[grade].color}"></span>`;
+const gemIcon = (gem, cls = '') => gemIconG(gem.g, cls);
+const gradeTag = gem => `<b class="grade" style="color:${GEM_GRADES[gem.g].color}">${GEM_GRADES[gem.g].name}</b>`;
+const gemCard = gem => `
+  <div class="gem-card" style="--gc:${GEM_GRADES[gem.g].color}">
+    ${gemIcon(gem, 'big')}
+    <div><div>${gradeTag(gem)} 보석</div>${gem.fx.map(f => `<div class="fx">${effectText(f)}</div>`).join('')}</div>
+  </div>`;
+
+// Left: every skill with its 3 sockets. Right: the selected socket, or (after Enter/tap)
+// the list of free gems to put in it, where gems can also be sold.
+function gemsScreen(game) {
+  const s = game.save;
+  s.gemSeenId = s.nextGemId - 1; // clears the "new gems" badge in town
+  game.persist();
+  const el = h(`
+    <div class="screen gems">
+      ${backBtn()}
+      <div class="panel gems-panel">
+        <div class="shop-head">
+          <h2>💎 보석</h2>
+          <div class="head-right"><button class="fuse-btn" type="button">⚗️ 보석 합성<span class="kbd-only"> (F)</span></button><div class="gold-chip"></div></div>
+        </div>
+        <div class="gems-body">
+          <div class="socket-list"></div>
+          <div class="gem-side"></div>
+        </div>
+        <div class="msg"></div>
+      </div>
+      <div class="hint-slot"></div>
+    </div>`);
+  const list = el.querySelector('.socket-list');
+  const side = el.querySelector('.gem-side');
+  let row = 0, col = 0, mode = 'sockets', pickIdx = 0, confirm = null; // mode: sockets | pick | fuse
+  let fuseIdx = 0, lastFused = null;
+
+  const skillId = () => SKILL_ORDER[row];
+  const fuseBlocker = g => {
+    const have = freeGems(s).filter(x => x.g === g).length;
+    if (have < FUSE_COUNT) return `${GEM_GRADES[g].name} 보석이 ${FUSE_COUNT - have}개 더 필요해요`;
+    if (s.gold < FUSE_COST[g]) return `골드가 ${fmtNum(FUSE_COST[g] - s.gold)} 부족해요`;
+    return '';
+  };
+
+  function fuseHtml() {
+    const rows = [0, 1, 2, 3].map(g => {
+      const have = freeGems(s).filter(x => x.g === g).length;
+      const why = fuseBlocker(g);
+      return `
+        <div class="pick-row fuse-row${g === fuseIdx ? ' sel' : ''}${why ? ' off' : ''}" data-g="${g}">
+          <div class="pick-mid">
+            <div>${gemIconG(g)}<b class="grade" style="color:${GEM_GRADES[g].color}">${GEM_GRADES[g].name}</b> ×${FUSE_COUNT}
+              → ${gemIconG(g + 1)}<b class="grade" style="color:${GEM_GRADES[g + 1].color}">${GEM_GRADES[g + 1].name}</b>
+              <small>(${have}개 있음)</small></div>
+            ${why ? `<div class="fuse-why">${why}</div>` : ''}
+          </div>
+          <div class="fuse-cost">💰 ${fmtNum(FUSE_COST[g])}</div>
+        </div>`;
+    }).join('');
+    return `
+      <div class="side-title">⚗️ 보석 합성</div>
+      <p class="tip">같은 등급 보석 3개를 합쳐서 한 등급 위 보석을 만들어요. 수치가 낮은 보석부터 쓰고, 스킬에 끼워 둔 보석은 쓰지 않아요.</p>
+      ${lastFused ? `<div class="side-sub">✨ 새로 만든 보석</div>${gemCard(lastFused)}` : ''}
+      <div class="pick-list">${rows}</div>`;
+  }
+
+  function askFuse(g) {
+    const why = fuseBlocker(g);
+    if (why) { sfx.error(); message(el, why, true); return; }
+    const used = fuseCandidates(s, g);
+    sfx.select();
+    confirm = confirmDialog(el, {
+      title: `⚗️ ${GEM_GRADES[g + 1].name} 보석을 만들까요?`,
+      text: `이 보석 3개와 💰${fmtNum(FUSE_COST[g])}골드를 써요<br>${used.map(x => `${gradeTag(x)} ${gemText(x)}`).join('<br>')}`,
+      no: '아니요',
+      yes: '⚗️ 합성하기',
+      onYes: () => {
+        const gem = fuse(s, g);
+        if (!gem) return;
+        lastFused = gem;
+        game.persist();
+        sfx.levelUp();
+        message(el, `${GEM_GRADES[gem.g].name} 보석이 생겼어요!`);
+        render();
+      },
+      onClose: () => { confirm = null; },
+    });
+  }
+
+  const setMode = m => {
+    mode = m;
+    if (m === 'fuse') lastFused = null;
+    sfx.select();
+    render();
+  };
+  const learned = id => s.skills[id] > 0;
+  // picker rows: "take it out" first when the socket is filled, then every free gem
+  const choices = () => {
+    const cur = socketsOf(s, skillId())[col];
+    return [...(cur ? [{ remove: true }] : []), ...freeGems(s).map(gem => ({ gem }))];
+  };
+
+  function detailHtml() {
+    const id = skillId(), sk = SKILLS[id];
+    const gem = findGem(s, socketsOf(s, id)[col]);
+    const tip = !learned(id)
+      ? `Lv ${sk.unlock}에 스킬을 배우면 보석을 끼울 수 있어요`
+      : freeGems(s).length || gem
+        ? `${kc('Enter')}를 누르거나 칸을 터치하면 보석을 끼우거나 바꿀 수 있어요`
+        : '끼울 보석이 없어요. 대장 몬스터와 보스를 잡으면 보석이 나와요!';
+    return `
+      <div class="side-title">${skillIcon(s, id)} ${skillTitle(s, id)} · ${col + 1}번 칸</div>
+      ${gem ? gemCard(gem) : '<div class="empty-socket">빈 칸</div>'}
+      <p class="tip">${tip}</p>
+      ${learned(id) ? `<div class="side-sub">지금 스킬: ${skillDesc(id, s.skills[id], gemMods(s)[id], catOf(s, id))}</div>` : ''}`;
+  }
+
+  function pickerHtml() {
+    const rows = choices();
+    return `
+      <div class="side-title">${skillTitle(s, skillId())} ${col + 1}번 칸에 끼울 보석</div>
+      <div class="pick-list">
+        ${rows.map((o, i) => o.remove
+          ? `<div class="pick-row${i === pickIdx ? ' sel' : ''}" data-i="${i}"><div class="pick-mid">↩ 보석 빼기</div></div>`
+          : `<div class="pick-row${i === pickIdx ? ' sel' : ''}" data-i="${i}">
+               ${gemIcon(o.gem)}
+               <div class="pick-mid">${gradeTag(o.gem)} ${gemText(o.gem)}</div>
+               <button class="sell" type="button" data-i="${i}">팔기 💰${GEM_GRADES[o.gem.g].sell}</button>
+             </div>`).join('')}
+      </div>`;
+  }
+
+  function render() {
+    el.querySelector('.gold-chip').textContent = `💎 ${s.gems.length}개 · 💰 ${fmtNum(s.gold)}`;
+    const mods = gemMods(s);
+    list.innerHTML = SKILL_ORDER.map((id, r) => {
+      const sk = SKILLS[id];
+      const sockets = socketsOf(s, id).map((gid, c) => {
+        const gem = findGem(s, gid);
+        const sel = r === row && c === col ? ' sel' : '';
+        return `<div class="socket${sel}${gem ? ' filled' : ''}" data-r="${r}" data-c="${c}">${gem ? gemIcon(gem) : '+'}</div>`;
+      }).join('');
+      return `
+        <div class="srow${learned(id) ? '' : ' locked'}${r === row ? ' cur' : ''}">
+          <div class="sk">
+            <div class="sk-name"><span class="ico">${skillIcon(s, id)}</span>${kc(sk.label, sk.label === 'Space' ? 'wide' : '')}${skillTitle(s, id)}</div>
+            <div class="sk-bonus${learned(id) && modsText(mods[id]) ? '' : ' none'}">${learned(id) ? modsText(mods[id]) || '보석 없음' : `🔒 Lv ${sk.unlock}에 배워요`}</div>
+          </div>
+          <div class="sockets">${sockets}</div>
+        </div>`;
+    }).join('');
+    side.innerHTML = mode === 'pick' ? pickerHtml() : mode === 'fuse' ? fuseHtml() : detailHtml();
+    side.querySelector('.pick-row.sel')?.scrollIntoView({ block: 'nearest' });
+    el.querySelector('.fuse-btn').classList.toggle('on', mode === 'fuse');
+    el.querySelector('.hint-slot').innerHTML = mode === 'pick'
+      ? hintbar([`${kc('↑')}${kc('↓')} 고르기`, `${kc('Enter')} 끼우기`, `${kc('X')} 팔기`, `${kc('Esc')} 취소`])
+      : mode === 'fuse'
+        ? hintbar([`${kc('↑')}${kc('↓')} 고르기`, `${kc('Enter')} 합성하기`, `${kc('Esc')} 돌아가기`])
+        : hintbar([`${kc('←')}${kc('↑')}${kc('↓')}${kc('→')} 칸 고르기`, `${kc('Enter')} 보석 끼우기`, `${kc('F')} 합성`, `${kc('Esc')} 뒤로`]);
+  }
+
+  function openPicker() {
+    const id = skillId();
+    if (!learned(id)) { sfx.error(); message(el, `Lv ${SKILLS[id].unlock}에 스킬을 배우면 쓸 수 있어요`, true); return; }
+    if (!choices().length) { sfx.denied(); message(el, '끼울 보석이 없어요. 대장 몬스터와 보스를 잡으면 보석이 나와요!', true); return; }
+    sfx.select();
+    mode = 'pick';
+    pickIdx = 0;
+    render();
+  }
+
+  function choose(i) {
+    const o = choices()[i];
+    if (!o) return;
+    if (o.remove) {
+      socketsOf(s, skillId())[col] = 0;
+      sfx.select();
+      message(el, '보석을 뺐어요');
+    } else {
+      socketsOf(s, skillId())[col] = o.gem.id;
+      sfx.upgrade();
+      message(el, `${GEM_GRADES[o.gem.g].name} 보석을 끼웠어요!`);
+    }
+    game.persist();
+    mode = 'sockets';
+    render();
+  }
+
+  function askSell(i) {
+    const o = choices()[i];
+    if (!o || o.remove) { sfx.denied(); return; }
+    const gem = o.gem, price = GEM_GRADES[gem.g].sell;
+    sfx.select();
+    confirm = confirmDialog(el, {
+      title: '💰 이 보석을 팔까요?',
+      text: `${GEM_GRADES[gem.g].name} 보석 · ${gemText(gem)}`,
+      no: '아니요, 가지고 있을래요',
+      yes: `💰 ${price}골드에 팔기`,
+      onYes: () => {
+        s.gems = s.gems.filter(g => g !== gem);
+        s.gold += price;
+        game.persist();
+        sfx.coin();
+        message(el, `💰 ${price}골드를 받았어요`);
+        if (!choices().length) mode = 'sockets';
+        pickIdx = Math.max(0, Math.min(pickIdx, choices().length - 1));
+        render();
+      },
+      onClose: () => { confirm = null; },
+    });
+  }
+
+  list.addEventListener('click', e => {
+    const sock = e.target.closest('.socket');
+    if (!sock) return;
+    const r = +sock.dataset.r, c = +sock.dataset.c;
+    const again = mode === 'sockets' && r === row && c === col;
+    row = r;
+    col = c;
+    mode = 'sockets';
+    if (again || game.inputMode === 'touch') openPicker();
+    else { sfx.select(); render(); }
+  });
+  side.addEventListener('click', e => {
+    const fuseRow = e.target.closest('.fuse-row');
+    if (fuseRow) { fuseIdx = +fuseRow.dataset.g; askFuse(fuseIdx); return; }
+    const sell = e.target.closest('.sell');
+    if (sell) { askSell(+sell.dataset.i); return; }
+    const r = e.target.closest('.pick-row');
+    if (r) choose(+r.dataset.i);
+  });
+  el.querySelector('.fuse-btn').addEventListener('click', () => setMode(mode === 'fuse' ? 'sockets' : 'fuse'));
+
+  return {
+    el,
+    mount: render,
+    onKey(code) {
+      if (confirm) { confirm.key(code); return; }
+      if (mode === 'fuse') {
+        if (isBack(code) || code === 'KeyF') setMode('sockets');
+        else if (code === 'ArrowDown') { fuseIdx = (fuseIdx + 1) % 4; sfx.select(); render(); }
+        else if (code === 'ArrowUp') { fuseIdx = (fuseIdx + 3) % 4; sfx.select(); render(); }
+        else if (code === 'Enter' || code === 'Space') askFuse(fuseIdx);
+        return;
+      }
+      if (mode === 'pick') {
+        const n = choices().length;
+        if (isBack(code)) { mode = 'sockets'; sfx.select(); render(); }
+        else if (code === 'ArrowDown') { pickIdx = (pickIdx + 1) % n; sfx.select(); render(); }
+        else if (code === 'ArrowUp') { pickIdx = (pickIdx - 1 + n) % n; sfx.select(); render(); }
+        else if (code === 'Enter' || code === 'Space') choose(pickIdx);
+        else if (code === 'KeyX' || code === 'Delete') askSell(pickIdx);
+        return;
+      }
+      if (isBack(code)) { sfx.select(); game.show('town'); return; }
+      if (code === 'KeyF') { setMode('fuse'); return; }
+      if (code === 'Enter' || code === 'Space') { openPicker(); return; }
+      if (code === 'ArrowDown') row = (row + 1) % SKILL_ORDER.length;
+      else if (code === 'ArrowUp') row = (row - 1 + SKILL_ORDER.length) % SKILL_ORDER.length;
+      else if (code === 'ArrowRight') col = Math.min(2, col + 1);
+      else if (code === 'ArrowLeft') col = Math.max(0, col - 1);
+      else return;
+      sfx.select();
+      render();
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+
 const PRACTICE_LEVELS = [
   ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyQ', 'KeyW', 'KeyE', 'KeyR'],
   ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyQ', 'KeyW', 'KeyE', 'KeyR', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'Digit1', 'Digit2', 'Digit3', 'Digit4'],
@@ -507,6 +1039,7 @@ function guideScreen(game, { first = false } = {}) {
           <span class="chip c-move">${kc('←')}${kc('↑')}${kc('↓')}${kc('→')} 이동</span>
           <span class="chip c-atk">${kc('Space', 'wide')} 공격</span>
           <span class="chip c-skill">${kc('Q')}${kc('W')}${kc('E')}${kc('R')} 스킬</span>
+          <span class="chip c-item">${kc('1')}${kc('2')} 물약</span>
           <span class="chip c-sys">${kc('Esc')} 멈춤/뒤로</span>
           <span class="chip c-ok">${kc('Enter')} 결정</span>
         </div>
@@ -572,6 +1105,10 @@ function resultScreen(game, r) {
   ];
   if (r.levels > 0) lines.push(`<li class="lvup">🆙 레벨업 ×${r.levels}! 지금 <b>Lv ${s.level}</b> · 스킬 포인트 +${r.levels}</li>`);
   for (const id of r.unlocked || []) lines.push(`<li class="lvup">✨ 새 스킬: ${kc(SKILLS[id].label)} ${SKILLS[id].name}</li>`);
+  for (const gem of r.gems || []) lines.push(`<li class="gem-line" style="--gc:${GEM_GRADES[gem.g].color}">${gemIcon(gem)} ${gradeTag(gem)} 보석 · ${gemText(gem)}</li>`);
+  for (const w of r.weapons || []) {
+    lines.push(`<li class="gem-line" style="--gc:${GEM_GRADES[w.g].color}">${WEAPON_CATS[w.cat].icon} ${gradeTag(w)} ${WEAPON_CATS[w.cat].name} · 공격력 ${w.atk}${w.fx.length ? ` · ${gemText(w)}` : ''}</li>`);
+  }
   const options = hasNext
     ? [{ label: `▶ 다음 스테이지 (${stageInfo(r.stageIndex + 1).label})`, go: () => game.startStage(r.stageIndex + 1) }, { label: '🏰 마을로', go: () => game.show('town') }]
     : [{ label: r.cleared ? '🔁 한 번 더 하기' : '🔁 다시 도전', go: () => game.startStage(r.stageIndex) }, { label: '🏰 마을로', go: () => game.show('town') }];
@@ -584,6 +1121,8 @@ function resultScreen(game, r) {
         <ul class="rewards">${lines.join('')}</ul>
         ${r.cleared ? '' : '<p class="tip">💡 얻은 골드와 경험치는 그대로예요. 대장간에서 장비를 강화하거나 스킬을 올리면 더 강해져요!</p>'}
         ${s.sp > 0 ? `<p class="tip">✨ 스킬 포인트가 ${s.sp}개 있어요. 마을의 [스킬] 메뉴에서 써 보세요!</p>` : ''}
+        ${r.gems?.length ? '<p class="tip">💎 마을의 [보석] 메뉴에서 무기와 스킬에 끼워 보세요!</p>' : ''}
+        ${r.weapons?.length ? '<p class="tip">🗡️ 마을의 [무기] 메뉴에서 새 무기를 들어 보세요!</p>' : ''}
         <div class="list compact">${options.map(o => `<div class="item"><div class="mid"><div class="name">${o.label}</div></div></div>`).join('')}</div>
       </div>
       ${hintbar([`${kc('↑')}${kc('↓')} 고르기`, `${kc('Enter')} 결정`])}
@@ -668,6 +1207,9 @@ export const SCREENS = {
   stages: stagesScreen,
   smithy: smithyScreen,
   skills: skillsScreen,
+  gems: gemsScreen,
+  weapons: weaponsScreen,
+  potions: potionsScreen,
   guide: guideScreen,
   result: resultScreen,
   pause: pauseScreen,

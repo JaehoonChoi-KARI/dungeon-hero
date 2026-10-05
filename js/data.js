@@ -1,6 +1,6 @@
 // Game data tables and progression formulas.
 
-export const VERSION = '1.1.1'; // keep in sync with CACHE in sw.js
+export const VERSION = '1.2.0'; // keep in sync with CACHE in sw.js
 
 export const STAGES_PER_WORLD = 5;
 export const MAX_LEVEL = 50;
@@ -54,7 +54,10 @@ export function stageInfo(i) {
     isBossStage: num === STAGES_PER_WORLD,
     killGoal: 14 + i,
     maxAlive: Math.min(12, 5 + Math.floor(i / 3)),
-    hpMul: 1 + 0.55 * i + 0.035 * i * i,
+    // second factor (+40% at 1-1 … +98% at 5-5) offsets the v1.2.0 additions (skill gems,
+    // lasting skill effects, weapon items) so a hero with typical loot is ~10% stronger than
+    // in v1.1.1; measured with tools/balance.html
+    hpMul: (1 + 0.55 * i + 0.035 * i * i) * (1.4 + 0.024 * i),
     dmgMul: 1 + 0.28 * i + 0.018 * i * i,
     rewardMul: 1 + 0.35 * i + 0.01 * i * i,
     recLevel: 1 + Math.round(i * 1.1),
@@ -64,7 +67,7 @@ export function stageInfo(i) {
 // ---- Skills ---------------------------------------------------------------
 
 export const SKILLS = {
-  atk: { label: 'Space', code: 'Space', name: '기본 공격', icon: '⚔️', unlock: 1, max: 5 },
+  atk: { label: 'Space', code: 'Space', name: '무기 공격', icon: '⚔️', unlock: 1, max: 5 }, // depends on the equipped weapon
   q: { label: 'Q', code: 'KeyQ', name: '회오리 베기', icon: '🌀', unlock: 2, max: 5 },
   w: { label: 'W', code: 'KeyW', name: '돌진', icon: '💨', unlock: 4, max: 5 },
   e: { label: 'E', code: 'KeyE', name: '화염구', icon: '🔥', unlock: 6, max: 5 },
@@ -78,29 +81,63 @@ export const PASSIVES = {
 };
 export const PASSIVE_ORDER = ['hp', 'str'];
 
-export function skillParams(id, lv) {
+// ---- Main weapons (Space) ---------------------------------------------------
+// Roughly equal damage per second; they differ in reach, area and speed.
+// kind: melee = arc in front, smash = circle hit in front, thrust = straight line,
+//       arrow = projectile that hits one enemy, orb = projectile that explodes.
+export const WEAPON_CATS = {
+  dagger: { name: '단검', icon: '🗡️', desc: '아주 빠르게 찔러요 · 치명타 +10%', attack: { kind: 'melee', mult: 0.62, cd: 0.22, range: 62, arc: 0.9, critBonus: 0.1, kb: 120 } },
+  sword: { name: '장검', icon: '⚔️', desc: '앞쪽을 넓게 베어요', attack: { kind: 'melee', mult: 1, cd: 0.36, range: 80, arc: 1.25, kb: 240 } },
+  hammer: { name: '해머', icon: '🔨', desc: '느리지만 앞쪽 땅을 쾅! 주변을 한꺼번에 때리고 멀리 밀쳐요', attack: { kind: 'smash', mult: 2.2, cd: 0.75, reach: 55, radius: 78, kb: 420 } },
+  spear: { name: '창', icon: '🔱', desc: '멀리까지 일직선으로 찔러서 줄 선 적을 모두 꿰뚫어요', attack: { kind: 'thrust', mult: 1.05, cd: 0.4, range: 135, width: 24, kb: 200 } },
+  bow: { name: '활', icon: '🏹', desc: '멀리 있는 적에게 화살을 쏴요', attack: { kind: 'arrow', mult: 0.95, cd: 0.38, range: 520, speed: 900, kb: 120 } },
+  staff: { name: '마법지팡이', icon: '🪄', desc: '마법 구슬을 쏘면 맞은 곳 주변이 펑! 터져요', attack: { kind: 'orb', mult: 1.25, cd: 0.55, range: 420, speed: 560, radius: 56, kb: 160 } },
+};
+export const WEAPON_ORDER = ['dagger', 'sword', 'hammer', 'spear', 'bow', 'staff'];
+
+export const NO_MODS = { dmg: 0, area: 0, cdr: 0, dur: 0, crit: 0 };
+
+// dur = how long the skill's lasting effect runs: atk slows, q keeps spinning,
+// w speeds you up after the dash, e leaves fire on the ground, r keeps striking.
+// mods = socketed gem totals for this skill (see gems.js); cat = equipped weapon type for 'atk'.
+export function skillParams(id, lv, mods = NO_MODS, cat = 'sword') {
   const n = Math.max(0, lv - 1);
+  let p;
   switch (id) {
-    case 'atk': return { mult: 1 + 0.15 * n, cd: 0.36, range: 80, arc: 1.25 };
-    case 'q': return { mult: 1.6 + 0.35 * n, cd: 5 - 0.5 * n, radius: 110 + 10 * n };
-    case 'w': return { mult: 2 + 0.45 * n, cd: 6 - 0.6 * n, dist: 220 + 15 * n };
-    case 'e': return { mult: 2.2 + 0.45 * n, cd: 3.5 - 0.3 * n, count: 1 + Math.floor(n / 2), radius: 80 + 6 * n };
-    case 'r': return { mult: 5 + 1.2 * n, cd: 28 - 2.5 * n, range: 640 };
+    case 'atk': {
+      const a = (WEAPON_CATS[cat] || WEAPON_CATS.sword).attack;
+      p = { ...a, mult: a.mult * (1 + 0.15 * n), dur: 0.6 };
+      break;
+    }
+    case 'q': p = { mult: 1.6 + 0.35 * n, cd: 5 - 0.5 * n, radius: 110 + 10 * n, dur: 0.5 }; break;
+    case 'w': p = { mult: 2 + 0.45 * n, cd: 6 - 0.6 * n, dist: 220 + 15 * n, dur: 1 }; break;
+    case 'e': p = { mult: 2.2 + 0.45 * n, cd: 3.5 - 0.3 * n, count: 1 + Math.floor(n / 2), radius: 80 + 6 * n, dur: 1.5 }; break;
+    case 'r': p = { mult: 5 + 1.2 * n, cd: 28 - 2.5 * n, range: 640, dur: 1.2 }; break;
+    default: return null;
   }
-  return null;
+  const area = 1 + mods.area;
+  p.mult *= 1 + mods.dmg;
+  p.cd *= 1 - mods.cdr;
+  p.dur *= 1 + mods.dur;
+  p.crit = mods.crit + (p.critBonus || 0);
+  if (p.range) p.range *= area;
+  if (p.radius) p.radius *= area;
+  if (p.dist) p.dist *= area;
+  if (p.width) p.width *= area;
+  return p;
 }
 
 const pct = m => `${Math.round(m * 100)}%`;
 export const fmt1 = x => String(Math.round(x * 10) / 10);
 
-export function skillDesc(id, lv) {
-  const p = skillParams(id, Math.max(1, lv));
+export function skillDesc(id, lv, mods = NO_MODS, cat = 'sword') {
+  const p = skillParams(id, Math.max(1, lv), mods, cat);
   switch (id) {
-    case 'atk': return `앞쪽을 베어요 · 피해 ${pct(p.mult)}`;
-    case 'q': return `주변을 빙글 베어요 · 피해 ${pct(p.mult)} · 재사용 ${fmt1(p.cd)}초`;
-    case 'w': return `앞으로 돌진! 돌진 중엔 무적 · 피해 ${pct(p.mult)} · 재사용 ${fmt1(p.cd)}초`;
-    case 'e': return `불덩이 ${p.count}개 발사 · 폭발 피해 ${pct(p.mult)} · 재사용 ${fmt1(p.cd)}초`;
-    case 'r': return `주변 모든 적에게 번개! · 피해 ${pct(p.mult)} · 재사용 ${fmt1(p.cd)}초`;
+    case 'atk': return `${WEAPON_CATS[cat].name}: ${WEAPON_CATS[cat].desc} · 맞은 적은 ${fmt1(p.dur)}초 동안 느려져요 · 피해 ${pct(p.mult)}`;
+    case 'q': return `${fmt1(p.dur)}초 동안 빙글빙글 여러 번 베어요 · 피해 ${pct(p.mult)} · 재사용 ${fmt1(p.cd)}초`;
+    case 'w': return `앞으로 돌진(무적)! 그 뒤 ${fmt1(p.dur)}초 동안 빨라져요 · 피해 ${pct(p.mult)} · 재사용 ${fmt1(p.cd)}초`;
+    case 'e': return `불덩이 ${p.count}개 발사, 터진 자리에 ${fmt1(p.dur)}초 동안 불 · 피해 ${pct(p.mult)} · 재사용 ${fmt1(p.cd)}초`;
+    case 'r': return `주변 모든 적에게 번개, ${fmt1(p.dur)}초 동안 더 떨어져요 · 피해 ${pct(p.mult)} · 재사용 ${fmt1(p.cd)}초`;
   }
   return '';
 }
@@ -110,31 +147,55 @@ export function skillDesc(id, lv) {
 export const weaponAtk = n => Math.round(3 * n + 0.12 * n * n);
 export const armorHp = n => Math.round(20 * n + n * n);
 
+// The equipped weapon and armor go past 30 ("초월") with each step 10% pricier than the last,
+// so late-game gold always has somewhere to go. Boots and ring stay capped.
+export const TRANSCEND_FROM = 30;
+const transcendCost = base => n => Math.round(n < TRANSCEND_FROM ? base * 1.2 ** n : base * 1.2 ** (TRANSCEND_FROM - 1) * 1.1 ** (n - TRANSCEND_FROM + 1));
+
+// Enhancement belongs to each weapon item: a new weapon starts again from +0.
+export const WEAPON_UP_MAX = 99;
+export const weaponUpCost = transcendCost(30);
+
 export const GEAR = {
-  weapon: { slot: '무기', icon: '🗡️', max: 30, tiers: ['나무 검', '철 검', '강철 검', '미스릴 검', '용의 검', '전설의 검'], cost: n => Math.round(30 * 1.2 ** n), effect: n => `공격력 +${weaponAtk(n)}` },
-  armor: { slot: '갑옷', icon: '🛡️', max: 30, tiers: ['천 옷', '가죽 갑옷', '사슬 갑옷', '강철 갑옷', '미스릴 갑옷', '용비늘 갑옷'], cost: n => Math.round(25 * 1.2 ** n), effect: n => `체력 +${armorHp(n)} · 방어력 +${n * 3}` },
+  armor: { slot: '갑옷', icon: '🛡️', max: 99, tiers: ['천 옷', '가죽 갑옷', '사슬 갑옷', '강철 갑옷', '미스릴 갑옷', '용비늘 갑옷'], cost: transcendCost(25), effect: n => `체력 +${armorHp(n)} · 방어력 +${n * 3}` },
   boots: { slot: '신발', icon: '👟', max: 10, tiers: ['바람의 신발'], cost: n => Math.round(60 * 1.45 ** n), effect: n => `이동 속도 +${n * 4}%` },
   ring: { slot: '반지', icon: '💍', max: 15, tiers: ['행운의 반지'], cost: n => Math.round(50 * 1.35 ** n), effect: n => `치명타 +${n * 2}% · 골드 +${n * 5}%` },
 };
-export const GEAR_ORDER = ['weapon', 'armor', 'boots', 'ring'];
+export const GEAR_ORDER = ['armor', 'boots', 'ring'];
 
 export const gearTier = n => Math.min(5, Math.floor(n / 5));
 export function gearName(id, n) {
   const g = GEAR[id];
   const name = g.tiers[Math.min(g.tiers.length - 1, Math.floor(n / 5))];
+  if (n > TRANSCEND_FROM) return `+${n} ✦${name}`;
   return n > 0 ? `+${n} ${name}` : name;
 }
-export const WEAPON_COLORS = ['#c9a06a', '#aeb6c2', '#e6ecf5', '#7fe7ff', '#ff6e40', '#ffd54f'];
+
+// ---- Potions (shop in town, numbers 1 and 2 in battle) ---------------------
+
+export const POTION_MAX = 10;
+export const POTIONS = {
+  hp: { name: '체력 물약', icon: '🧪', code: 'Digit1', label: '1', desc: '체력을 40% 채워요', price: L => 20 + 8 * L },
+  atk: { name: '힘의 물약', icon: '💪', code: 'Digit2', label: '2', desc: '12초 동안 피해 +30%', price: L => 30 + 12 * L },
+};
+export const POTION_ORDER = ['hp', 'atk'];
+export const POTION_HEAL = 0.4;
+export const POWER_TIME = 12;
+export const POWER_MULT = 1.3;
 export const ARMOR_COLORS = ['#e9dcc0', '#a8693a', '#8d99a6', '#cfd8e3', '#5fd4e8', '#d83a3a'];
 
 // ---- Player progression ---------------------------------------------------
 
 export const xpNeed = L => Math.round(12 * L ** 1.55 + 8);
 
+export const equippedWeapon = save => save.weapons.find(w => w.id === save.weaponId) || save.weapons[0] || null;
+// a weapon item's own attack plus its enhancement
+export const weaponPower = w => (w ? w.atk + weaponAtk(w.up) : 0);
+
 export function computeStats(save) {
   const L = save.level, g = save.gear, sk = save.skills;
   return {
-    atk: Math.round((10 + 2 * (L - 1) + weaponAtk(g.weapon)) * (1 + 0.05 * sk.str)),
+    atk: Math.round((10 + 2 * (L - 1) + weaponPower(equippedWeapon(save))) * (1 + 0.05 * sk.str)),
     maxHp: Math.round((100 + 12 * (L - 1) + armorHp(g.armor)) * (1 + 0.06 * sk.hp)),
     def: 3 * g.armor,
     speed: 230 * (1 + 0.04 * g.boots),

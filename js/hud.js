@@ -1,6 +1,6 @@
 // DOM heads-up display shown during battle.
 
-import { SKILLS, SKILL_ORDER, skillParams, xpNeed, MAX_LEVEL, fmtNum } from './data.js';
+import { SKILLS, SKILL_ORDER, WEAPON_CATS, POTIONS, POTION_ORDER, xpNeed, MAX_LEVEL, fmtNum } from './data.js';
 
 export function createHud(root, { onPause }) {
   root.innerHTML = `
@@ -26,6 +26,15 @@ export function createHud(root, { onPause }) {
           <span class="kc">${SKILLS[id].label}</span>
         </div>`).join('')}
     </div>
+    <div class="hud-potions">
+      ${POTION_ORDER.map(id => `
+        <div class="potion" data-p="${id}">
+          <div class="ico">${POTIONS[id].icon}</div>
+          <span class="cnt"></span>
+          <div class="ptime"></div>
+          <span class="kc">${POTIONS[id].label}</span>
+        </div>`).join('')}
+    </div>
     <div class="hud-help"><span class="kc">Esc</span> 또는 <span class="kc">P</span> 일시정지</div>
     <button class="hud-pause" type="button" aria-label="일시정지">⏸</button>`;
 
@@ -41,6 +50,10 @@ export function createHud(root, { onPause }) {
     skills: Object.fromEntries(SKILL_ORDER.map(id => {
       const s = root.querySelector(`.skill[data-id="${id}"]`);
       return [id, { root: s, cd: s.querySelector('.cd'), cdt: s.querySelector('.cdt') }];
+    })),
+    potions: Object.fromEntries(POTION_ORDER.map(id => {
+      const p = root.querySelector(`.potion[data-p="${id}"]`);
+      return [id, { root: p, cnt: p.querySelector('.cnt'), ptime: p.querySelector('.ptime') }];
     })),
   };
   const last = {};
@@ -84,17 +97,28 @@ export function createHud(root, { onPause }) {
       set('progT', progText, v => (el.progText.textContent = v));
       set('bossMode', bossMode, v => el.stage.classList.toggle('boss', v));
 
+      set('atkIcon', WEAPON_CATS[b.weapon.cat].icon, v => (el.skills.atk.root.querySelector('.ico').textContent = v));
       for (const id of SKILL_ORDER) {
         const lv = s.skills[id];
         const sk = el.skills[id];
         set('lock' + id, lv <= 0, v => sk.root.classList.toggle('locked', v));
         if (lv <= 0) continue;
         const cd = Math.max(0, p.cds[id]);
-        const frac = cd > 0 ? Math.min(1, cd / skillParams(id, lv).cd) : 0;
+        const frac = cd > 0 ? Math.min(1, cd / b.skill(id).cd) : 0;
         set('cd' + id, frac.toFixed(3), v => (sk.cd.style.transform = `scaleY(${v})`));
         set('cdt' + id, id !== 'atk' && cd > 0.05 ? String(Math.ceil(cd)) : '', v => (sk.cdt.textContent = v));
         set('ready' + id, cd <= 0, v => sk.root.classList.toggle('ready', v));
       }
+
+      for (const id of POTION_ORDER) {
+        const po = el.potions[id], n = s.potions[id];
+        set('pc' + id, String(n), v => (po.cnt.textContent = v));
+        set('pe' + id, n <= 0, v => po.root.classList.toggle('empty', v));
+      }
+      set('power', b.powerT > 0 ? String(Math.ceil(b.powerT)) : '', v => {
+        el.potions.atk.ptime.textContent = v;
+        el.potions.atk.root.classList.toggle('active', !!v);
+      });
 
       const hint = b.tutorialHint();
       const hintHtml = hint ? `${hint.keys.map(k => `<span class="kc">${k}</span>`).join('')} <b>${hint.text}</b>` : '';

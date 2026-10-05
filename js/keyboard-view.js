@@ -12,6 +12,7 @@ export const GAME_KEY_ROLES = {
   ArrowUp: 'move', ArrowDown: 'move', ArrowLeft: 'move', ArrowRight: 'move',
   Space: 'atk',
   KeyQ: 'skill', KeyW: 'skill', KeyE: 'skill', KeyR: 'skill',
+  Digit1: 'item', Digit2: 'item',
   Escape: 'sys', Enter: 'ok',
 };
 

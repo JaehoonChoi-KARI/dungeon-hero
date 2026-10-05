@@ -1,0 +1,135 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>balance</title>
+</head>
+<body>
+<pre id="out">running...</pre>
+<script type="module">
+// Balance probe: a bot fights stages with a "typical" hero for that point in the game and
+// reports clear time and damage taken (as a share of max HP).
+//   ?base=<path to a game copy>   (default: this repo)  e.g. ../.balance-old for an older build
+//   &gems=1                        give the hero the gems it would have collected by then
+//   &hp=1.3&dmg=1.2&hpg=0.02&dmgg=0.01   try monster multipliers: x(hp + hpg*stage)
+//   &stages=2,7,12,17,22&runs=3
+const q = new URLSearchParams(location.search);
+const base = q.get('base') || '..';
+const { Battle } = await import(`${base}/js/battle.js`);
+const { input } = await import(`${base}/js/input.js`);
+const { defaultSave } = await import(`${base}/js/save.js`);
+const gemsMod = q.get('gems') ? await import(`${base}/js/gems.js`) : null;
+const weaponsMod = await import(`${base}/js/weapons.js`).catch(() => null); // builds before weapon items have none
+const stages = (q.get('stages') || '2,7,12,17,22').split(',').map(Number);
+const runs = +(q.get('runs') || 3);
+const hpK = +(q.get('hp') || 1), dmgK = +(q.get('dmg') || 1);
+const hpG = +(q.get('hpg') || 0), dmgG = +(q.get('dmgg') || 0);
+
+const SPEND = ['q', 'e', 'atk', 'r', 'w'];
+function typicalSave(i) {
+  const s = defaultSave();
+  s.level = 1 + Math.round(i * 1.1);
+  s.tutorialDone = true;
+  s.cleared = i;
+  s.gear = { weapon: i, armor: i, boots: Math.min(10, Math.floor(i / 2)), ring: Math.min(15, Math.floor(i / 2)) };
+  if (weaponsMod && s.weapons) {
+    // the weapons that would have dropped so far; the strongest one is held and enhanced to +i
+    for (let j = 0; j < i; j++) {
+      const boss = j % 5 === 4;
+      if (boss || Math.random() < weaponsMod.ELITE_WEAPON_CHANCE) s.weapons.push(weaponsMod.rollWeapon(s, j, boss));
+    }
+    const best = s.weapons.reduce((a, b) => (b.atk > a.atk ? b : a));
+    best.up = i;
+    s.weaponId = best.id;
+  }
+  const L = s.level;
+  s.skills = { atk: 1, q: L >= 2 ? 1 : 0, w: L >= 4 ? 1 : 0, e: L >= 6 ? 1 : 0, r: L >= 9 ? 1 : 0, hp: 0, str: 0 };
+  let sp = L - 1;
+  for (let guard = 0; sp > 0 && guard < 100; guard++) {
+    const id = SPEND.find(k => s.skills[k] > 0 && s.skills[k] < 5);
+    if (id) s.skills[id]++;
+    else if (s.skills.str < 10) s.skills.str++;
+    else s.skills.hp++;
+    sp--;
+  }
+  if (gemsMod && s.gems) {
+    // one gem per stage cleared so far, best ones socketed (Q, E, R, Space, W)
+    for (let j = 0; j < i; j++) s.gems.push(gemsMod.rollGem(s, Math.floor(j / 5), j % 5 === 4));
+    const best = [...s.gems].sort((a, b) => b.g - a.g);
+    const order = ['q', 'e', 'r', 'atk', 'w'].filter(id => s.skills[id] > 0);
+    let k = 0;
+    const socketsOf = id => (id === 'atk' && s.weapons ? s.weapons.find(w => w.id === s.weaponId).sockets : s.sockets[id]);
+    for (let slot = 0; slot < 3; slot++) for (const id of order) if (k < best.length) socketsOf(id)[slot] = best[k++].id;
+  }
+  return s;
+}
+
+const ARROWS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+function drive(b) {
+  const p = b.player;
+  let best = null, bd = Infinity;
+  for (const e of b.enemies) {
+    if (e.dead) continue;
+    const d = Math.hypot(e.x - p.x, e.y - p.y);
+    if (d < bd) { bd = d; best = e; }
+  }
+  for (const k of ARROWS) input.simulateUp(k);
+  if (best) {
+    const dx = best.x - p.x, dy = best.y - p.y;
+    if (dx < -8) input.simulateDown('ArrowLeft');
+    if (dx > 8) input.simulateDown('ArrowRight');
+    if (dy < -8) input.simulateDown('ArrowUp');
+    if (dy > 8) input.simulateDown('ArrowDown');
+  }
+  input.simulateDown('Space');
+  for (const k of ['KeyQ', 'KeyW', 'KeyE', 'KeyR']) {
+    input.simulateUp(k);
+    if (Math.random() < 0.03) input.simulateDown(k);
+  }
+}
+
+function fight(i) {
+  let ended = false;
+  const save = typicalSave(i);
+  const game = { save, inputMode: 'keyboard', testGod: true, persist() {}, showSkillIntro() {}, onBattleEnd() { ended = true; } };
+  const b = new Battle(game, i);
+  b.stage.hpMul *= hpK + hpG * i;
+  b.stage.dmgMul *= dmgK + dmgG * i;
+  let taken = 0;
+  b.damagePlayer = raw => { // count damage, never die
+    const p = b.player;
+    if (b.state !== 'play' || p.inv > 0 || p.dash) return;
+    taken += Math.max(1, Math.round((raw * 100) / (100 + b.stats.def)));
+    p.inv = 0.8;
+  };
+  let t = 0, bossAt = null;
+  while (!ended && t < 400) {
+    drive(b);
+    b.update(1 / 60);
+    input.endFrame();
+    t += 1 / 60;
+    if (bossAt === null && b.boss && b.boss.spawnT <= 0) bossAt = t;
+    if (b.state === 'clear') break;
+  }
+  for (const k of [...ARROWS, 'Space']) input.simulateUp(k);
+  // bossSec = how long the stage-end boss survived: the clearest measure of hero damage
+  return { t, bossSec: bossAt === null ? 0 : t - bossAt, hpShare: taken / b.stats.maxHp, cleared: b.state === 'clear' };
+}
+
+const rows = [];
+for (const i of stages) {
+  let t = 0, bs = 0, h = 0, c = 0;
+  for (let r = 0; r < runs; r++) {
+    const res = fight(i);
+    t += res.t;
+    bs += res.bossSec;
+    h += res.hpShare;
+    c += res.cleared ? 1 : 0;
+  }
+  rows.push({ stage: i, label: `${Math.floor(i / 5) + 1}-${(i % 5) + 1}`, clearSec: +(t / runs).toFixed(1), bossSec: +(bs / runs).toFixed(1), dmgTakenPerMaxHp: +(h / runs).toFixed(2), cleared: `${c}/${runs}` });
+}
+document.getElementById('out').textContent = JSON.stringify(rows);
+document.title = 'done';
+</script>
+</body>
+</html>

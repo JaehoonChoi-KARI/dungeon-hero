@@ -14,6 +14,7 @@
   --skill: #ff9a3d;
   --sys: #ff6b7a;
   --ok: #b48cff;
+  --item-key: #2fd3c0;
   --font: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
   --safe-t: max(12px, env(safe-area-inset-top));
   --safe-b: max(14px, env(safe-area-inset-bottom));
@@ -343,6 +344,93 @@ h2 { margin: 0 0 14px; font-size: 26px; font-weight: 900; }
 .portrait-box { width: 170px; flex-shrink: 0; text-align: center; color: var(--muted); font-size: 13px; background: rgba(0, 0, 0, 0.2); border-radius: 16px; padding: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .portrait-box p { margin: 8px 0 0; }
 
+/* ---- gems ---------------------------------------------------------------- */
+
+.gem-ico {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin: 3px;
+  border-radius: 4px;
+  transform: rotate(45deg);
+  background: var(--gc);
+  box-shadow: inset 4px 4px 0 rgba(255, 255, 255, 0.5), inset -3px -3px 0 rgba(0, 0, 0, 0.25), 0 0 10px var(--gc);
+  vertical-align: middle;
+}
+.gem-ico.big { width: 34px; height: 34px; margin: 8px; border-radius: 7px; }
+.grade { font-weight: 900; }
+
+.gems-panel { width: min(980px, 100%); }
+.gems-body { display: grid; grid-template-columns: 1.3fr 1fr; gap: 18px; align-items: start; }
+.socket-list { display: flex; flex-direction: column; gap: 8px; }
+.srow { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 14px; background: var(--item); border: 2px solid transparent; }
+.srow.cur { border-color: rgba(255, 213, 79, 0.45); background: var(--item-sel); }
+.srow.locked { opacity: 0.5; }
+.srow .sk { flex: 1; min-width: 0; }
+.sk-name { display: flex; align-items: center; gap: 6px; font-weight: 800; font-size: 16px; white-space: nowrap; }
+.sk-name .ico { font-size: 22px; }
+.sk-bonus { font-size: 12px; color: var(--good); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sk-bonus.none { color: var(--muted); }
+.sockets { display: flex; gap: 8px; }
+.socket {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  border: 2px dashed rgba(255, 255, 255, 0.28);
+  background: rgba(0, 0, 0, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 22px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.socket.filled { border-style: solid; border-color: rgba(255, 255, 255, 0.35); }
+.socket.sel { border: 3px solid var(--gold); box-shadow: 0 0 0 3px rgba(255, 213, 79, 0.25); }
+.gem-side { background: rgba(0, 0, 0, 0.22); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 10px; max-height: 440px; overflow: auto; }
+.side-title { font-weight: 900; font-size: 17px; }
+.side-sub { font-size: 13px; color: #c9cbf0; }
+.gem-side .tip { text-align: left; margin: 0; }
+.empty-socket { padding: 18px; border: 2px dashed rgba(255, 255, 255, 0.2); border-radius: 14px; text-align: center; color: var(--muted); }
+.gem-card { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 14px; border: 2px solid var(--gc); background: rgba(0, 0, 0, 0.25); }
+.gem-card .fx { font-weight: 800; font-size: 17px; margin-top: 2px; }
+.pick-list { display: flex; flex-direction: column; gap: 8px; }
+.pick-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--item); border: 2px solid transparent; cursor: pointer; touch-action: manipulation; }
+.pick-row.sel { border-color: var(--gold); background: var(--item-sel); }
+.pick-mid { flex: 1; min-width: 0; font-size: 14px; }
+.sell { padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(255, 213, 79, 0.5); background: rgba(255, 213, 79, 0.1); color: var(--gold); font: 700 12px var(--font); cursor: pointer; white-space: nowrap; touch-action: manipulation; }
+.weapon-list { max-height: 460px; overflow: auto; padding: 2px; }
+.weapon-row { align-items: center; }
+.w-ico { font-size: 28px; width: 36px; text-align: center; flex-shrink: 0; }
+.w-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.w-sockets { display: flex; gap: 2px; flex-shrink: 0; }
+.gem-ico.mini { width: 10px; height: 10px; margin: 3px; border-radius: 2px; }
+.gem-empty { display: inline-block; width: 10px; height: 10px; margin: 3px; border-radius: 2px; border: 1px dashed rgba(255, 255, 255, 0.35); transform: rotate(45deg); vertical-align: middle; }
+.tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 800; vertical-align: middle; }
+.tag.on { background: rgba(110, 240, 143, 0.18); color: var(--good); }
+.tag.new { background: var(--bad); color: #fff; }
+.weapon-card { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 14px; border: 2px solid var(--gc); background: rgba(0, 0, 0, 0.25); }
+.w-big { font-size: 44px; }
+.side-sub.up { color: var(--good); font-weight: 800; }
+.side-sub.down { color: var(--bad); font-weight: 800; }
+.side-sub.on { color: var(--good); }
+.gem-side .btn-row { margin-top: 4px; justify-content: flex-start; flex-wrap: wrap; }
+.gem-side .btn { padding: 10px 16px; font-size: 16px; }
+.sound-btn { margin-left: 10px; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--item); color: var(--text); font: 700 13px var(--font); cursor: pointer; vertical-align: middle; touch-action: manipulation; }
+
+.head-right { display: flex; align-items: center; gap: 10px; }
+.fuse-btn { padding: 8px 14px; border-radius: 999px; border: 2px solid var(--line); background: var(--item); color: var(--text); font: 800 15px var(--font); cursor: pointer; touch-action: manipulation; white-space: nowrap; }
+.fuse-btn.on { border-color: var(--gold); background: var(--item-sel); }
+.fuse-row.off { opacity: 0.6; }
+.fuse-row .grade { margin: 0 2px; }
+.fuse-why { font-size: 12px; color: var(--bad); margin-top: 3px; }
+.fuse-cost { font-weight: 800; color: var(--gold); white-space: nowrap; }
+.confirm-panel p { line-height: 1.6; }
+.rewards .gem-line { border: 1px solid var(--gc); background: rgba(0, 0, 0, 0.25); display: flex; align-items: center; gap: 6px; }
+.next.gem-bonus { color: var(--good); }
+
 /* ---- keyboard guide ------------------------------------------------------ */
 
 .guide-panel { width: min(1000px, 100%); }
@@ -355,6 +443,7 @@ h2 { margin: 0 0 14px; font-size: 26px; font-weight: 900; }
 .chip.c-skill { border-color: var(--skill); }
 .chip.c-sys { border-color: var(--sys); }
 .chip.c-ok { border-color: var(--ok); }
+.chip.c-item { border-color: var(--item-key); }
 .challenge { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; font-size: 18px; gap: 12px; flex-wrap: wrap; }
 .target-name { color: var(--gold); font-size: 24px; margin-left: 6px; }
 .score { color: var(--muted); }
@@ -397,6 +486,7 @@ h2 { margin: 0 0 14px; font-size: 26px; font-weight: 900; }
 .kb-key.role-skill { background: linear-gradient(#ffad5c, #f07a1a); color: #fff; box-shadow: 0 3px 0 #8a430a; }
 .kb-key.role-sys { background: linear-gradient(#ff8794, #d94456); color: #fff; box-shadow: 0 3px 0 #7c1f2b; }
 .kb-key.role-ok { background: linear-gradient(#c4a2ff, #8e62e8); color: #fff; box-shadow: 0 3px 0 #4d2f8f; }
+.kb-key.role-item { background: linear-gradient(#4fe3d1, #1ea996); color: #fff; box-shadow: 0 3px 0 #0f5f55; }
 .kb-key.target { z-index: 1; outline: 3px solid var(--gold); outline-offset: 2px; animation: target 0.7s infinite alternate; }
 .kb-key.hit { animation: keyhit 0.35s; }
 .kb-key.good { animation: keygood 0.5s; }
@@ -483,6 +573,38 @@ h2 { margin: 0 0 14px; font-size: 26px; font-weight: 900; }
 .hud-skills .skill.locked .ico { filter: grayscale(1); opacity: 0.45; }
 .hud-skills .skill.locked .kc { opacity: 0.55; }
 .hud-skills .skill.ready:not(.locked) { border-color: rgba(255, 213, 79, 0.9); box-shadow: 0 0 12px rgba(255, 213, 79, 0.35); }
+
+/* potions: bottom-right with a keyboard, under the pause button in touch mode */
+.hud-potions { position: absolute; right: var(--safe-r); bottom: calc(var(--safe-b) + 10px); display: flex; gap: 10px; }
+.potion {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: rgba(12, 14, 36, 0.78);
+  border: 2px solid rgba(47, 211, 192, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: pointer;
+}
+.potion .ico { font-size: 26px; }
+.potion .cnt { position: absolute; top: 2px; right: 5px; font-weight: 900; font-size: 13px; text-shadow: 0 1px 2px #000; }
+.potion .ptime { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 20px; color: #ffcf6b; text-shadow: 0 2px 3px #000; }
+.potion .kc { position: absolute; bottom: -12px; left: 50%; top: auto; transform: translateX(-50%); font-size: 12px; margin: 0; }
+.potion.empty { opacity: 0.45; border-color: rgba(255, 255, 255, 0.2); }
+.potion.active { border-color: #ff9f43; box-shadow: 0 0 14px rgba(255, 159, 67, 0.6); }
+.potion.pressed { transform: scale(0.9); filter: brightness(1.3); }
+body.touch-mode .hud-potions { bottom: auto; top: calc(var(--safe-t) + 66px); flex-direction: column; gap: 16px; }
+
+.potions .fill { padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(47, 211, 192, 0.6); background: rgba(47, 211, 192, 0.12); color: #9ff3e8; font: 700 13px var(--font); cursor: pointer; white-space: nowrap; touch-action: manipulation; }
+.potions .kb { margin-top: 14px; }
+
+.town .list { gap: 8px; }
+.town .item { padding: 9px 16px; }
+.town .item .ico { font-size: 26px; }
 
 .hud-help { position: absolute; bottom: var(--safe-b); left: var(--safe-l); color: rgba(255, 255, 255, 0.8); font-size: 14px; font-weight: 700; text-shadow: 0 1px 2px #000; }
 .hud-hint {
@@ -659,6 +781,8 @@ body.touch-mode .hud-toast { bottom: calc(var(--safe-b) + 24px); }
   .hero-card, .portrait-box { width: 100%; }
   .world-row { grid-template-columns: 70px repeat(5, 1fr); gap: 6px; }
   .slot-row { gap: 8px; }
+  .gems-body { grid-template-columns: 1fr; }
+  .socket { width: 40px; height: 40px; }
   .slot { min-height: 0; padding: 10px 6px; }
   .slot .portrait { width: 70px; height: 70px; }
   .world-name { font-size: 12px; }

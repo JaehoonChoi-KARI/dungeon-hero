@@ -2,15 +2,23 @@
 
 import { input } from './input.js';
 import { sfx } from './audio.js';
-import { MONSTERS, WORLDS, SKILLS, stageInfo, computeStats, skillParams, xpNeed, MAX_LEVEL } from './data.js';
+import {
+  MONSTERS, WORLDS, SKILLS, WEAPON_CATS, POTIONS, equippedWeapon, POTION_ORDER, POTION_HEAL, POWER_TIME, POWER_MULT,
+  stageInfo, computeStats, skillParams, xpNeed, MAX_LEVEL,
+} from './data.js';
 import { emojiSprite, drawSprite } from './sprites.js';
-import { drawHero, SWING_TIME, SPIN_TIME } from './hero.js';
+import { drawHero, SWING_TIME } from './hero.js';
+import { GEM_GRADES, gemMods, rollGem } from './gems.js';
+import { rollWeapon, weaponName, ELITE_WEAPON_CHANCE } from './weapons.js';
 
 export const MAP_W = 2400;
 export const MAP_H = 1600;
 const TAU = Math.PI * 2;
 const TILE = 120;
 const DASH_TIME = 0.18;
+const SPIN_TICK = 0.25; // Q hits this often while spinning
+const BURN_TICK = 0.3; // E fire on the ground
+const STORM_TICK = 0.4; // R extra lightning
 
 const rand = (a, b) => a + Math.random() * (b - a);
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
@@ -22,6 +30,35 @@ const angleDiff = (a, b) => {
   while (d < -Math.PI) d += TAU;
   return d;
 };
+
+// A faceted gem in its grade color, with a soft glow.
+export function drawGem(ctx, x, y, size, color, time = 0) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 14 + Math.sin(time * 6) * 5;
+  ctx.fillStyle = color;
+  ctx.strokeStyle = 'rgba(20,20,40,.8)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, -size);
+  ctx.lineTo(size * 0.8, -size * 0.25);
+  ctx.lineTo(0, size);
+  ctx.lineTo(-size * 0.8, -size * 0.25);
+  ctx.closePath();
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,.55)';
+  ctx.beginPath();
+  ctx.moveTo(0, -size);
+  ctx.lineTo(size * 0.35, -size * 0.25);
+  ctx.lineTo(0, size * 0.2);
+  ctx.lineTo(-size * 0.35, -size * 0.25);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
 
 function makeDeco(world) {
   const list = [];
@@ -38,21 +75,28 @@ export class Battle {
     this.stage = stageInfo(stageIndex);
     this.world = WORLDS[this.stage.world];
     this.stats = computeStats(this.save);
+    this.mods = gemMods(this.save);
+    this.weapon = equippedWeapon(this.save);
 
     this.player = {
       x: MAP_W / 2, y: MAP_H / 2, r: 18, hp: this.stats.maxHp,
       face: { x: 0, y: 1 }, faceAngle: Math.PI / 2, moving: false, walkT: 0,
-      inv: 0, swing: 0, swingAngle: 0, spin: 0, dash: null, trail: [],
+      inv: 0, swing: 0, swingAngle: 0, dash: null, trail: [],
+      spin: 0, spinT: 0, spinTick: 0, spinPrm: null, // Q whirlwind: time left, time spun, next hit
+      hasteT: 0, // W: speed boost after the dash
       cds: { atk: 0, q: 0, w: 0, e: 0, r: 0 },
     };
     this.enemies = [];
     this.shots = [];
     this.fireballs = [];
+    this.missiles = []; // bow arrows and staff orbs
     this.pickups = [];
     this.effects = [];
     this.texts = [];
     this.particles = [];
     this.timers = [];
+    this.zones = []; // E: burning ground
+    this.storms = []; // R: lightning that keeps striking
     this.banners = [];
     this.toast = null;
 
@@ -70,7 +114,8 @@ export class Battle {
     this.saveT = 0;
     this.shake = 0;
     this.flashScreen = 0;
-    this.earned = { gold: 0, xp: 0, levels: 0, unlocked: [], clearBonus: 0, firstClear: false };
+    this.powerT = 0; // 힘의 물약: extra damage while > 0
+    this.earned = { gold: 0, xp: 0, levels: 0, unlocked: [], clearBonus: 0, firstClear: false, gems: [], weapons: [] };
     this.cam = { x: this.player.x, y: this.player.y };
     this.deco = makeDeco(this.world);
     this.tutorial = !this.save.tutorialDone && stageIndex === 0 ? { step: 0, moved: 0, attacks: 0 } : null;
@@ -116,6 +161,9 @@ export class Battle {
     this.updateEnemies(dt);
     this.updateShots(dt);
     this.updateFireballs(dt);
+    this.updateMissiles(dt);
+    this.updateZones(dt);
+    this.updateStorms(dt);
     this.updatePickups(dt);
     if (this.state === 'play') this.updateSpawning(dt);
     this.updateEffects(dt);
@@ -140,7 +188,17 @@ export class Battle {
     for (const k in p.cds) if (p.cds[k] > 0) p.cds[k] -= dt;
     if (p.inv > 0) p.inv -= dt;
     if (p.swing > 0) p.swing -= dt;
-    if (p.spin > 0) p.spin -= dt;
+    if (p.hasteT > 0) p.hasteT -= dt;
+    if (this.powerT > 0) this.powerT -= dt;
+    if (p.spin > 0) {
+      p.spin -= dt;
+      p.spinT += dt;
+      p.spinTick -= dt;
+      if (p.spinTick <= 0 && p.spin > 0) {
+        p.spinTick += SPIN_TICK;
+        this.spinHit(p.spinPrm);
+      }
+    }
 
     let mx = 0, my = 0;
     if (input.isDown('ArrowLeft')) mx -= 1;
@@ -171,13 +229,15 @@ export class Battle {
         if (dist2(p.x, p.y, e.x, e.y) < (e.r + p.r + 16) ** 2) {
           d.hit.add(e);
           const len = Math.hypot(d.vx, d.vy) || 1;
-          this.hitEnemy(e, d.mult, { kb: 420, kx: d.vx / len, ky: d.vy / len });
+          this.hitEnemy(e, d.mult, { kb: 420, kx: d.vx / len, ky: d.vy / len, crit: d.crit });
         }
       }
       if (d.t <= 0) p.dash = null;
     } else if (p.moving) {
-      p.x += mx * this.stats.speed * dt;
-      p.y += my * this.stats.speed * dt;
+      const speed = this.stats.speed * (p.hasteT > 0 ? 1.4 : 1);
+      p.x += mx * speed * dt;
+      p.y += my * speed * dt;
+      if (p.hasteT > 0 && Math.random() < 0.5) p.trail.push({ x: p.x, y: p.y, t: 0.1 });
       p.walkT += dt;
       if (this.tutorial) this.tutorial.moved += dt;
     }
@@ -187,6 +247,9 @@ export class Battle {
     if (input.isDown('Space') && p.cds.atk <= 0 && !p.dash) this.basicAttack();
     for (const id of ['q', 'w', 'e', 'r']) {
       if (input.wasPressed(SKILLS[id].code)) this.trySkill(id);
+    }
+    for (const id of POTION_ORDER) {
+      if (input.wasPressed(POTIONS[id].code) || input.wasPressed('Numpad' + POTIONS[id].label)) this.usePotion(id);
     }
     this.updateTutorial();
   }
@@ -218,23 +281,88 @@ export class Battle {
 
   // ---- player skills --------------------------------------------------------
 
+  targets() {
+    return this.enemies.filter(e => !e.dead && e.spawnT <= 0);
+  }
+
+  // Space: how it attacks depends on the equipped weapon type (WEAPON_CATS in data.js).
   basicAttack() {
     const p = this.player;
-    const prm = skillParams('atk', this.save.skills.atk);
+    const prm = this.skill('atk');
     p.cds.atk = prm.cd;
     p.swing = SWING_TIME;
     p.swingAngle = p.faceAngle;
-    sfx.swing();
-    this.effects.push({ type: 'slash', x: p.x, y: p.y, angle: p.faceAngle, r: prm.range, t: 0, dur: 0.18 });
-    for (const e of this.enemies) {
-      if (e.dead || e.spawnT > 0) continue;
-      const dx = e.x - p.x, dy = e.y - p.y;
-      const d = Math.hypot(dx, dy) || 1;
-      if (d > prm.range + e.r) continue;
-      if (d > e.r + p.r && Math.abs(angleDiff(Math.atan2(dy, dx), p.faceAngle)) > prm.arc) continue;
-      this.hitEnemy(e, prm.mult, { kb: 240, kx: dx / d, ky: dy / d });
+    const fx = Math.cos(p.faceAngle), fy = Math.sin(p.faceAngle);
+    const opts = (kx, ky) => ({ kb: prm.kb, kx, ky, crit: prm.crit, slow: prm.dur });
+    switch (prm.kind) {
+      case 'melee': // dagger, sword: an arc in front
+        sfx.swing();
+        this.effects.push({ type: 'slash', x: p.x, y: p.y, angle: p.faceAngle, r: prm.range, t: 0, dur: 0.18 });
+        for (const e of this.targets()) {
+          const dx = e.x - p.x, dy = e.y - p.y, d = Math.hypot(dx, dy) || 1;
+          if (d > prm.range + e.r) continue;
+          if (d > e.r + p.r && Math.abs(angleDiff(Math.atan2(dy, dx), p.faceAngle)) > prm.arc) continue;
+          this.hitEnemy(e, prm.mult, opts(dx / d, dy / d));
+        }
+        break;
+      case 'smash': { // hammer: everything around the spot in front
+        const cx = p.x + fx * prm.reach, cy = p.y + fy * prm.reach;
+        sfx.smash();
+        this.shake = Math.max(this.shake, 0.08);
+        this.effects.push({ type: 'smash', x: cx, y: cy, r: prm.radius, t: 0, dur: 0.3 });
+        this.burst(cx, cy, '#d9c7a3', 10, 200);
+        for (const e of this.targets()) {
+          if (dist2(cx, cy, e.x, e.y) > (prm.radius + e.r) ** 2) continue;
+          const dx = e.x - p.x, dy = e.y - p.y, d = Math.hypot(dx, dy) || 1;
+          this.hitEnemy(e, prm.mult, opts(dx / d, dy / d));
+        }
+        break;
+      }
+      case 'thrust': // spear: a straight line, hits every enemy on it
+        sfx.swing();
+        this.effects.push({ type: 'thrust', x: p.x, y: p.y, angle: p.faceAngle, r: prm.range, w: prm.width, t: 0, dur: 0.16 });
+        for (const e of this.targets()) {
+          const dx = e.x - p.x, dy = e.y - p.y;
+          const along = dx * fx + dy * fy, side = Math.abs(dy * fx - dx * fy);
+          if (along < -e.r || along > prm.range + e.r || side > prm.width + e.r) continue;
+          this.hitEnemy(e, prm.mult, opts(fx, fy));
+        }
+        break;
+      default: // bow arrows and staff orbs fly; see updateMissiles
+        if (prm.kind === 'arrow') sfx.bow();
+        else sfx.magic();
+        this.missiles.push({
+          kind: prm.kind, x: p.x + fx * 20, y: p.y + fy * 20, vx: fx * prm.speed, vy: fy * prm.speed,
+          life: prm.range / prm.speed, mult: prm.mult, crit: prm.crit, slow: prm.dur, kb: prm.kb, radius: prm.radius || 0,
+        });
     }
     if (this.tutorial) this.tutorial.attacks++;
+  }
+
+  updateMissiles(dt) {
+    for (const m of this.missiles) {
+      m.x += m.vx * dt;
+      m.y += m.vy * dt;
+      m.life -= dt;
+      const hit = this.enemies.find(e => !e.dead && e.spawnT <= 0 && dist2(m.x, m.y, e.x, e.y) < (e.r + 8) ** 2);
+      if (m.kind === 'arrow') {
+        if (hit) {
+          const d = Math.hypot(m.vx, m.vy) || 1;
+          this.hitEnemy(hit, m.mult, { kb: m.kb, kx: m.vx / d, ky: m.vy / d, crit: m.crit, slow: m.slow });
+          m.life = 0;
+        }
+      } else if (hit || m.life <= 0) { // orb: bursts where it hits (or where it runs out)
+        m.life = 0;
+        this.effects.push({ type: 'magic', x: m.x, y: m.y, r: m.radius, t: 0, dur: 0.3 });
+        this.burst(m.x, m.y, '#d6b8ff', 10, 200);
+        for (const e of this.targets()) {
+          const dx = e.x - m.x, dy = e.y - m.y, d = Math.hypot(dx, dy) || 1;
+          if (d < m.radius + e.r) this.hitEnemy(e, m.mult, { kb: m.kb, kx: dx / d, ky: dy / d, crit: m.crit, slow: m.slow });
+        }
+      }
+      if (m.x < 0 || m.x > MAP_W || m.y < 0 || m.y > MAP_H) m.life = 0;
+    }
+    this.missiles = this.missiles.filter(m => m.life > 0);
   }
 
   trySkill(id) {
@@ -250,7 +378,7 @@ export class Battle {
       sfx.denied();
       return;
     }
-    const prm = skillParams(id, lv);
+    const prm = this.skill(id);
     p.cds[id] = prm.cd;
     if (id === 'q') this.castSpin(prm);
     else if (id === 'w') this.castDash(prm);
@@ -258,33 +386,78 @@ export class Battle {
     else if (id === 'r') this.castThunder(prm);
   }
 
+  // Number keys 1 and 2 (or the touch buttons): potions bought in town.
+  usePotion(id) {
+    const p = this.player, s = this.save, def = POTIONS[id];
+    if (s.potions[id] <= 0) {
+      this.showToast(`${def.name}이 없어요 · 마을의 물약 상점에서 살 수 있어요`, 2.2);
+      sfx.denied();
+      return;
+    }
+    if (id === 'hp') {
+      if (p.hp >= this.stats.maxHp) { this.showToast('체력이 이미 가득해요'); sfx.denied(); return; }
+      const heal = Math.round(this.stats.maxHp * POTION_HEAL);
+      p.hp = Math.min(this.stats.maxHp, p.hp + heal);
+      this.addText(p.x, p.y - 44, `+${heal}`, '#7dffa0', 26);
+      this.burst(p.x, p.y, '#7dffa0', 14, 200);
+      sfx.heal();
+    } else {
+      if (this.powerT > 3) { this.showToast('아직 힘의 물약 효과가 남아 있어요'); sfx.denied(); return; }
+      this.powerT = POWER_TIME;
+      this.banner('💪 힘이 솟아요!', '#ffb36b', 1.2, 40);
+      this.burst(p.x, p.y, '#ff9f43', 16, 240);
+      sfx.upgrade();
+    }
+    s.potions[id]--;
+  }
+
+  // Current numbers for a skill: its level plus the gems socketed into it.
+  skill(id) {
+    return skillParams(id, this.save.skills[id], this.mods[id], id === 'atk' ? this.weapon.cat : undefined);
+  }
+
+  // Q: a whirlwind that follows the hero and hits every SPIN_TICK while it lasts.
   castSpin(prm) {
     const p = this.player;
-    p.spin = SPIN_TIME;
+    p.spin = prm.dur;
+    p.spinT = 0;
+    p.spinTick = SPIN_TICK;
+    p.spinPrm = prm;
+    this.effects.push({ type: 'spin', follow: true, r: prm.radius, t: 0, dur: prm.dur });
+    this.spinHit(prm);
+  }
+
+  spinHit(prm) {
+    const p = this.player;
     sfx.spin();
-    this.effects.push({ type: 'spin', x: p.x, y: p.y, r: prm.radius, t: 0, dur: 0.35 });
     for (const e of this.enemies) {
       if (e.dead || e.spawnT > 0) continue;
       const dx = e.x - p.x, dy = e.y - p.y;
       const d = Math.hypot(dx, dy) || 1;
-      if (d < prm.radius + e.r) this.hitEnemy(e, prm.mult, { kb: 360, kx: dx / d, ky: dy / d });
+      if (d < prm.radius + e.r) this.hitEnemy(e, prm.mult * 0.55, { kb: 300, kx: dx / d, ky: dy / d, crit: prm.crit });
     }
   }
 
+  // W: dash through enemies (invulnerable), then run faster for prm.dur seconds.
   castDash(prm) {
     const p = this.player;
-    p.dash = { t: DASH_TIME, vx: (p.face.x * prm.dist) / DASH_TIME, vy: (p.face.y * prm.dist) / DASH_TIME, hit: new Set(), mult: prm.mult };
+    p.dash = { t: DASH_TIME, vx: (p.face.x * prm.dist) / DASH_TIME, vy: (p.face.y * prm.dist) / DASH_TIME, hit: new Set(), mult: prm.mult, crit: prm.crit };
     p.inv = Math.max(p.inv, DASH_TIME + 0.2);
+    p.hasteT = DASH_TIME + prm.dur;
     p.trail = [];
     sfx.dash();
   }
 
+  // E: fireballs; each explosion leaves fire on the ground for prm.dur seconds.
   castFireball(prm) {
     const p = this.player;
     const n = prm.count;
     for (let i = 0; i < n; i++) {
       const a = p.faceAngle + (i - (n - 1) / 2) * 0.22;
-      this.fireballs.push({ x: p.x + Math.cos(a) * 22, y: p.y + Math.sin(a) * 22, vx: Math.cos(a) * 620, vy: Math.sin(a) * 620, life: 0.85, r: 14, mult: prm.mult, radius: prm.radius });
+      this.fireballs.push({
+        x: p.x + Math.cos(a) * 22, y: p.y + Math.sin(a) * 22, vx: Math.cos(a) * 620, vy: Math.sin(a) * 620,
+        life: 0.85, r: 14, mult: prm.mult, radius: prm.radius, dur: prm.dur, crit: prm.crit,
+      });
     }
     sfx.fireball();
   }
@@ -300,20 +473,63 @@ export class Battle {
       if (dist2(p.x, p.y, e.x, e.y) > prm.range ** 2) continue;
       hits++;
       this.effects.push({ type: 'bolt', x: e.x, y: e.y, t: 0, dur: 0.35, seed: Math.random() * 1000 });
-      this.hitEnemy(e, prm.mult, {});
+      this.hitEnemy(e, prm.mult, { crit: prm.crit });
     }
     for (let i = hits; i < 4; i++) {
       this.effects.push({ type: 'bolt', x: p.x + rand(-300, 300), y: p.y + rand(-220, 220), t: 0, dur: 0.35, seed: Math.random() * 1000 });
     }
+    this.storms.push({ t: prm.dur, tick: STORM_TICK, mult: prm.mult * 0.3, range: prm.range, crit: prm.crit });
+  }
+
+  // E's burning ground: hurts whatever stands in it every BURN_TICK.
+  updateZones(dt) {
+    for (const z of this.zones) {
+      z.t -= dt;
+      z.tick -= dt;
+      if (Math.random() < 0.5) {
+        const a = rand(0, TAU), d = rand(0, z.r);
+        this.particles.push({ x: z.x + Math.cos(a) * d, y: z.y + Math.sin(a) * d, vx: 0, vy: rand(-90, -40), t: 0, dur: 0.45, size: rand(4, 8), color: Math.random() < 0.5 ? '#ffb02e' : '#ff5a1f' });
+      }
+      if (z.tick > 0) continue;
+      z.tick += BURN_TICK;
+      for (const e of this.enemies) {
+        if (!e.dead && e.spawnT <= 0 && dist2(z.x, z.y, e.x, e.y) < (z.r + e.r * 0.5) ** 2) this.hitEnemy(e, z.mult, { crit: z.crit });
+      }
+    }
+    this.zones = this.zones.filter(z => z.t > 0);
+  }
+
+  // R's lingering storm: one more bolt on a random nearby enemy every STORM_TICK.
+  updateStorms(dt) {
+    const p = this.player;
+    for (const s of this.storms) {
+      s.t -= dt;
+      s.tick -= dt;
+      if (s.tick > 0) continue;
+      s.tick += STORM_TICK;
+      const near = this.enemies.filter(e => !e.dead && e.spawnT <= 0 && dist2(p.x, p.y, e.x, e.y) < s.range ** 2);
+      sfx.zap();
+      if (!near.length) {
+        this.effects.push({ type: 'bolt', x: p.x + rand(-300, 300), y: p.y + rand(-220, 220), t: 0, dur: 0.3, seed: Math.random() * 1000 });
+        continue;
+      }
+      const e = pick(near);
+      this.effects.push({ type: 'bolt', x: e.x, y: e.y, t: 0, dur: 0.3, seed: Math.random() * 1000 });
+      this.hitEnemy(e, s.mult, { crit: s.crit });
+    }
+    this.storms = this.storms.filter(s => s.t > 0);
   }
 
   // ---- combat ---------------------------------------------------------------
 
-  hitEnemy(e, mult, { kb = 0, kx = 0, ky = 0 } = {}) {
+  // crit: extra crit chance from gems; slow: seconds the enemy moves slower (basic attack)
+  hitEnemy(e, mult, { kb = 0, kx = 0, ky = 0, crit: critBonus = 0, slow = 0 } = {}) {
     if (e.dead) return;
     const st = this.stats;
-    const crit = Math.random() < st.crit;
-    const dmg = Math.max(1, Math.round(st.atk * mult * rand(0.9, 1.1) * (crit ? 2 : 1)));
+    const crit = Math.random() < st.crit + critBonus;
+    if (slow) e.slowT = Math.max(e.slowT || 0, slow);
+    const power = this.powerT > 0 ? POWER_MULT : 1;
+    const dmg = Math.max(1, Math.round(st.atk * mult * power * rand(0.9, 1.1) * (crit ? 2 : 1)));
     e.hp -= dmg;
     e.flash = 1;
     if (kb) {
@@ -338,7 +554,33 @@ export class Battle {
       this.save.kills++;
       if (Math.random() < 0.05) this.pickups.push({ type: 'heart', x: e.x, y: e.y, vx: 0, vy: 0, t: 0, value: 0 });
     }
-    if (e.isStageBoss) this.onBossDefeated(e);
+    if (e.isStageBoss) {
+      this.onBossDefeated(e);
+      this.dropGem(e);
+      this.dropWeapon(e);
+    }
+  }
+
+  // World bosses always drop a weapon, 대장 monsters sometimes; it goes straight into the bag.
+  dropWeapon(e) {
+    if (e.kind !== 'boss' && Math.random() >= ELITE_WEAPON_CHANCE) return;
+    const w = rollWeapon(this.save, this.stage.index, e.kind === 'boss');
+    this.save.weapons.push(w);
+    this.earned.weapons.push(w);
+    this.pickups.push({ type: 'weapon', weapon: w, x: e.x + 30, y: e.y, vx: 70, vy: -140, t: 0, value: 0 });
+    this.banner(`${WEAPON_CATS[w.cat].icon} ${weaponName(w)} 획득!`, GEM_GRADES[w.g].color, 3, 42);
+    this.game.persist();
+  }
+
+  // Every stage-end boss (대장 or world boss) drops one gem; it goes straight into the bag.
+  dropGem(e) {
+    const gem = rollGem(this.save, this.stage.world, e.kind === 'boss');
+    this.save.gems.push(gem);
+    this.earned.gems.push(gem);
+    this.pickups.push({ type: 'gem', gem, x: e.x, y: e.y, vx: 0, vy: -140, t: 0, value: 0 });
+    const grade = GEM_GRADES[gem.g];
+    this.banner(`💎 ${grade.name} 보석 획득!`, grade.color, 3, 46);
+    this.game.persist();
   }
 
   dropGold(x, y, total) {
@@ -514,6 +756,7 @@ export class Battle {
       if (e.dead) continue;
       e.t += dt;
       if (e.flash > 0) e.flash = Math.max(0, e.flash - dt * 6);
+      if (e.slowT > 0) e.slowT -= dt;
       if (e.spawnT > 0) {
         e.spawnT -= dt;
         continue;
@@ -523,7 +766,12 @@ export class Battle {
       const fr = Math.pow(0.002, dt);
       e.kvx *= fr;
       e.kvy *= fr;
-      if (this.state === 'play') this.think(e, dt);
+      if (this.state === 'play') {
+        const speed = e.speed;
+        if (e.slowT > 0) e.speed *= e.kind === 'mob' || e.kind === 'minion' ? 0.5 : 0.75; // basic-attack slow
+        this.think(e, dt);
+        e.speed = speed;
+      }
       e.x = clamp(e.x, e.r, MAP_W - e.r);
       e.y = clamp(e.y, e.r, MAP_H - e.r);
       if (this.state === 'play' && dist2(e.x, e.y, p.x, p.y) < (e.r + p.r * 0.8) ** 2) this.damagePlayer(e.dmg, e.x, e.y);
@@ -706,8 +954,9 @@ export class Battle {
         for (const e of this.enemies) {
           if (e.dead || e.spawnT > 0) continue;
           const dx = e.x - f.x, dy = e.y - f.y, d = Math.hypot(dx, dy) || 1;
-          if (d < f.radius + e.r) this.hitEnemy(e, f.mult, { kb: 260, kx: dx / d, ky: dy / d });
+          if (d < f.radius + e.r) this.hitEnemy(e, f.mult, { kb: 260, kx: dx / d, ky: dy / d, crit: f.crit });
         }
+        this.zones.push({ x: f.x, y: f.y, r: f.radius * 0.85, t: f.dur, dur: f.dur, tick: BURN_TICK, mult: f.mult * 0.15, crit: f.crit });
       }
     }
     this.fireballs = this.fireballs.filter(f => f.life > 0);
@@ -720,7 +969,9 @@ export class Battle {
       k.t += dt;
       const dx = p.x - k.x, dy = p.y - k.y, d = Math.hypot(dx, dy) || 1;
       // nearby coins fly to the hero; leftovers come by themselves after a while
-      if ((k.t > 0.35 && d < 140) || k.t > 6 || (allIn && k.t > 0.2)) {
+      const loot = k.type === 'gem' || k.type === 'weapon';
+      const settle = loot ? 0.9 : 0.2; // let dropped loot float a moment so it's seen
+      if ((k.t > 0.35 && d < 140 && !loot) || k.t > 6 || (allIn && k.t > settle)) {
         const sp = 300 + 900 / Math.max(0.3, d / 100);
         k.vx = (dx / d) * Math.min(sp, 900);
         k.vy = (dy / d) * Math.min(sp, 900);
@@ -731,12 +982,14 @@ export class Battle {
       }
       k.x += k.vx * dt;
       k.y += k.vy * dt;
-      if (d < p.r + 12 && (k.t > 0.25 || allIn)) {
+      if (d < p.r + 12 && k.t > (loot ? 0.9 : allIn ? 0 : 0.25)) {
         k.taken = true;
         if (k.type === 'gold') {
           this.save.gold += k.value;
           this.earned.gold += k.value;
           sfx.coin();
+        } else if (loot) {
+          sfx.upgrade(); // already in the bag (see dropGem); this is just the pickup flourish
         } else if (this.state === 'play') {
           const heal = Math.round(this.stats.maxHp * 0.25);
           p.hp = Math.min(this.stats.maxHp, p.hp + heal);
@@ -810,6 +1063,7 @@ export class Battle {
 
     this.drawGround(ctx, cx, cy, vw, vh);
     this.drawTelegraphs(ctx);
+    this.drawZones(ctx);
     this.drawPickups(ctx);
 
     const p = this.player;
@@ -826,11 +1080,18 @@ export class Battle {
     actors.push(p);
     actors.sort((a, b) => a.y - b.y);
     for (const a of actors) {
-      if (a === p) drawHero(ctx, p, this.save.gear, this.time);
-      else this.drawEnemy(ctx, a);
+      if (a !== p) { this.drawEnemy(ctx, a); continue; }
+      if (this.powerT > 0) { // 힘의 물약 aura
+        ctx.fillStyle = `rgba(255,140,40,${0.25 + 0.1 * Math.sin(this.time * 10)})`;
+        ctx.beginPath();
+        ctx.ellipse(p.x, p.y + 20, 30, 11, 0, 0, TAU);
+        ctx.fill();
+      }
+      drawHero(ctx, p, this.save.gear, this.time, this.weapon);
     }
 
     this.drawFireballs(ctx);
+    this.drawMissiles(ctx);
     this.drawShots(ctx);
     this.drawEffects(ctx);
     for (const q of this.particles) {
@@ -902,9 +1163,73 @@ export class Battle {
         ctx.stroke();
         ctx.fillStyle = 'rgba(255,255,255,.8)';
         ctx.fillRect(k.x - 2, k.y + bob - 4, 2, 5);
+      } else if (k.type === 'gem') {
+        drawGem(ctx, k.x, k.y + bob * 2, 16, GEM_GRADES[k.gem.g].color, this.time);
+      } else if (k.type === 'weapon') {
+        const color = GEM_GRADES[k.weapon.g].color;
+        ctx.save();
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 16;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(k.x, k.y + bob * 2, 20, 0, TAU);
+        ctx.stroke();
+        ctx.restore();
+        drawSprite(ctx, emojiSprite(WEAPON_CATS[k.weapon.cat].icon, 26), k.x, k.y + bob * 2);
       } else {
         drawSprite(ctx, emojiSprite('❤️', 22), k.x, k.y + bob);
       }
+    }
+  }
+
+  drawMissiles(ctx) {
+    for (const m of this.missiles) {
+      if (m.kind === 'arrow') {
+        const a = Math.atan2(m.vy, m.vx);
+        ctx.save();
+        ctx.translate(m.x, m.y);
+        ctx.rotate(a);
+        ctx.strokeStyle = '#8a5a2b';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(-22, 0);
+        ctx.lineTo(6, 0);
+        ctx.stroke();
+        ctx.fillStyle = '#e6ecf5';
+        ctx.beginPath();
+        ctx.moveTo(12, 0);
+        ctx.lineTo(3, -5);
+        ctx.lineTo(3, 5);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#ff6b6b';
+        ctx.fillRect(-24, -4, 6, 8);
+        ctx.restore();
+      } else {
+        const g = ctx.createRadialGradient(m.x, m.y, 1, m.x, m.y, 16);
+        g.addColorStop(0, '#ffffff');
+        g.addColorStop(0.4, '#c9a7ff');
+        g.addColorStop(1, 'rgba(140,90,255,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, 16, 0, TAU);
+        ctx.fill();
+      }
+    }
+  }
+
+  drawZones(ctx) {
+    for (const z of this.zones) {
+      const fade = Math.min(1, z.t / 0.3);
+      const g = ctx.createRadialGradient(z.x, z.y, z.r * 0.2, z.x, z.y, z.r);
+      g.addColorStop(0, `rgba(255,190,60,${0.45 * fade})`);
+      g.addColorStop(0.7, `rgba(255,90,30,${(0.3 + 0.08 * Math.sin(this.time * 20)) * fade})`);
+      g.addColorStop(1, 'rgba(255,60,0,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(z.x, z.y, z.r, 0, TAU);
+      ctx.fill();
     }
   }
 
@@ -915,6 +1240,13 @@ export class Battle {
     ctx.beginPath();
     ctx.ellipse(e.x, e.y + e.r * 0.9, e.r * 0.85 * scale, e.r * 0.3 * scale, 0, 0, TAU);
     ctx.fill();
+    if (e.slowT > 0) { // frosty ring = slowed by the basic attack
+      ctx.strokeStyle = 'rgba(150,220,255,.85)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(e.x, e.y + e.r * 0.9, e.r, e.r * 0.36, 0, 0, TAU);
+      ctx.stroke();
+    }
     if (e.kind === 'elite' || e.kind === 'boss') {
       ctx.strokeStyle = e.kind === 'boss' ? 'rgba(255,60,60,.55)' : 'rgba(255,170,60,.55)';
       ctx.lineWidth = 4;
@@ -990,20 +1322,55 @@ export class Battle {
           ctx.stroke();
           break;
         }
-        case 'spin': {
-          ctx.strokeStyle = '#bfe9ff';
-          ctx.lineWidth = 14 * (1 - k) + 2;
+        case 'spin': { // follows the hero for as long as the whirlwind lasts
+          const { x, y } = this.player;
+          ctx.globalAlpha = k > 0.8 ? (1 - k) / 0.2 : 0.85;
+          ctx.strokeStyle = 'rgba(191,233,255,.55)';
+          ctx.lineWidth = 6;
           ctx.beginPath();
-          ctx.arc(fx.x, fx.y, fx.r * (0.5 + k * 0.5), 0, TAU);
+          ctx.arc(x, y, fx.r, 0, TAU);
           ctx.stroke();
           ctx.strokeStyle = '#ffffff';
           ctx.lineWidth = 4;
           for (let i = 0; i < 3; i++) {
-            const a = k * TAU * 1.5 + (i * TAU) / 3;
+            const a = fx.t * TAU * 3 + (i * TAU) / 3;
             ctx.beginPath();
-            ctx.arc(fx.x, fx.y, fx.r * 0.8, a, a + 0.9);
+            ctx.arc(x, y, fx.r * 0.8, a, a + 0.9);
             ctx.stroke();
           }
+          break;
+        }
+        case 'smash': { // hammer: shockwave ring on the ground
+          ctx.strokeStyle = '#f3e3c3';
+          ctx.lineWidth = 8 * (1 - k) + 2;
+          ctx.beginPath();
+          ctx.ellipse(fx.x, fx.y, fx.r * (0.4 + 0.6 * k), fx.r * (0.4 + 0.6 * k) * 0.6, 0, 0, TAU);
+          ctx.stroke();
+          break;
+        }
+        case 'thrust': { // spear: a quick streak along the line
+          ctx.save();
+          ctx.translate(fx.x, fx.y);
+          ctx.rotate(fx.angle);
+          ctx.fillStyle = 'rgba(255,255,255,.75)';
+          ctx.beginPath();
+          ctx.moveTo(10, -fx.w * 0.5);
+          ctx.lineTo(fx.r * Math.min(1, k * 3), 0);
+          ctx.lineTo(10, fx.w * 0.5);
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+          break;
+        }
+        case 'magic': {
+          ctx.fillStyle = '#b48cff';
+          ctx.globalAlpha = (1 - k) * 0.6;
+          ctx.beginPath();
+          ctx.arc(fx.x, fx.y, fx.r * (0.4 + 0.6 * k), 0, TAU);
+          ctx.fill();
+          ctx.strokeStyle = '#f1e6ff';
+          ctx.lineWidth = 3;
+          ctx.stroke();
           break;
         }
         case 'explosion':

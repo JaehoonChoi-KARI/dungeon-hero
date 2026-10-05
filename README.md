@@ -49,4 +49,12 @@ ES module을 쓰기 때문에 `index.html`을 더블클릭해서 열면 동작�
 | `js/hero.js` | 주인공 그리기 (장비 단계에 따라 모습이 바뀜) |
 | `js/keyboard-view.js` | 화면 속 키보드 |
 | `js/touch.js` | 터치 조작 (가상 조이스틱, 스킬 버튼) |
+| `js/gems.js` | 스킬 보석 (등급, 효과, 드롭 확률, 스킬별 합산, 합성) |
+| `js/weapons.js` | 무기 아이템 (6종, 등급, 랜덤 공격력·효과, 드롭). 무기별 공격 방식은 `data.js`의 `WEAPON_CATS` |
 | `tools/icon.html` | 앱 아이콘 생성용 페이지 |
+| `tools/balance.html` | 밸런스 측정: 각 스테이지에 맞는 평범한 캐릭터로 봇이 싸우고, 보스 처치 시간과 받은 피해를 출력 |
+
+밸런스 측정 예시:
+
+- `http://localhost:8000/tools/balance.html?gems=1&runs=10`
+- 옛 버전과 비교하려면 `git archive --format=tar v1.1.1 js | tar -x -C .balance-old` 로 옛 코드를 꺼낸 뒤 `?base=../.balance-old` 를 붙여 실행합니다.

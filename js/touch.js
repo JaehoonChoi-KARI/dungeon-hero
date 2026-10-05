@@ -2,7 +2,7 @@
 // tappable Space/Q/W/E/R buttons, fed into the same input system as the keyboard.
 
 import { input } from './input.js';
-import { SKILLS } from './data.js';
+import { SKILLS, POTIONS } from './data.js';
 
 const JOY_R = 56; // how far the knob can travel, in CSS px
 
@@ -44,9 +44,9 @@ export function initTouchControls(hudRoot, game) {
   zone.addEventListener('pointercancel', endJoy);
   zone.addEventListener('lostpointercapture', endJoy);
 
-  // Skill buttons act like holding the matching key (Space can be held to keep attacking).
-  for (const slot of hudRoot.querySelectorAll('.skill')) {
-    const code = SKILLS[slot.dataset.id].code;
+  // Skill and potion buttons act like holding the matching key (Space can be held to keep attacking).
+  for (const slot of hudRoot.querySelectorAll('.skill, .potion')) {
+    const code = slot.dataset.id ? SKILLS[slot.dataset.id].code : POTIONS[slot.dataset.p].code;
     let pid = null;
     slot.addEventListener('pointerdown', e => {
       e.preventDefault();
