@@ -20,7 +20,7 @@
 3. 아이 기기에서는 게임을 한 번 실행하면 새 버전을 내려받고, 그다음 실행부터 새 버전이 적용됩니다.
 
 - 빌드 도구 없음: HTML / CSS / JavaScript(ES modules)만 사용
-- 저장: 기기의 localStorage (`dungeonHero.save.v1`)
+- 저장: 기기의 localStorage에 세이브 슬롯 3개(`dungeonHero.slot.1`~`3`)를 둡니다. 소리와 입력 방식 설정은 `dungeonHero.prefs`에 저장합니다.
 - 오프라인: HTTPS로 호스팅하면 `sw.js`가 파일을 캐시
 
 ## PC에서 실행 / 같은 Wi-Fi의 아이패드에서 테스트

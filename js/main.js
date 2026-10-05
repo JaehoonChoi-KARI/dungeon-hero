@@ -2,7 +2,7 @@
 
 import { initInput, input } from './input.js';
 import { unlockAudio, setSoundEnabled } from './audio.js';
-import { loadSave, writeSave, defaultSave } from './save.js';
+import { defaultSave, loadSlot, writeSlot, loadPrefs, writePrefs, defaultPrefs, migrateLegacySave, useTestStorage } from './save.js';
 import { Battle } from './battle.js';
 import { createHud } from './hud.js';
 import { initTouchControls } from './touch.js';
@@ -17,6 +17,8 @@ const hud = createHud(hudRoot, { onPause: () => game.pause() });
 
 const params = new URLSearchParams(location.search);
 const testMode = params.has('autotest') || params.has('shot');
+if (testMode) useTestStorage();
+else migrateLegacySave();
 
 const view = { w: 0, h: 0, zoom: 1, dpr: 1 };
 function resize() {
@@ -30,7 +32,9 @@ function resize() {
 }
 
 const game = {
-  save: testMode ? defaultSave() : loadSave(),
+  prefs: testMode ? defaultPrefs() : loadPrefs(),
+  slot: null, // 1..3 once a save slot is chosen
+  save: defaultSave(),
   battle: null,
   paused: false,
   screen: null,
@@ -42,7 +46,34 @@ const game = {
   inputMode: 'keyboard',
 
   persist() {
-    if (!testMode) writeSave(this.save);
+    if (!testMode && this.slot) writeSlot(this.slot, this.save);
+  },
+
+  savePrefs() {
+    if (!testMode) writePrefs(this.prefs);
+  },
+
+  // Continue the slot's save, or start a new game if the slot is empty.
+  openSlot(n) {
+    const existing = loadSlot(n);
+    this.slot = n;
+    this.save = existing || defaultSave();
+    this.townIndex = 0;
+    this.prefs.lastSlot = n;
+    this.savePrefs();
+    this.persist();
+    const firstTime = !this.save.tutorialDone && this.save.cleared < 0;
+    if (!firstTime) this.show('town');
+    else if (this.inputMode === 'touch') this.startStage(0); // the in-battle hints explain touch controls
+    else this.show('guide', { first: true });
+  },
+
+  // Save and go back to the title (the closest thing a web app has to quitting).
+  exitToTitle() {
+    this.persist();
+    this.slot = null;
+    this.save = defaultSave();
+    this.show('title');
   },
 
   // Switches between keyboard and touch layouts; called on every real key press / screen touch.
@@ -50,8 +81,8 @@ const game = {
     if (this.inputMode === mode) return;
     this.inputMode = mode;
     document.body.classList.toggle('touch-mode', mode === 'touch');
-    this.save.inputMode = mode;
-    this.persist();
+    this.prefs.inputMode = mode;
+    this.savePrefs();
   },
 
   show(name, arg) {
@@ -133,9 +164,9 @@ const game = {
   },
 
   setSound(on) {
-    this.save.sound = on;
+    this.prefs.sound = on;
     setSoundEnabled(on);
-    this.persist();
+    this.savePrefs();
   },
 };
 
@@ -173,7 +204,7 @@ function boot() {
   window.addEventListener('resize', resize);
   initInput();
   initTouchControls(hudRoot, game);
-  const startMode = params.has('touch') ? 'touch' : game.save.inputMode;
+  const startMode = params.has('touch') ? 'touch' : game.prefs.inputMode;
   game.inputMode = startMode;
   document.body.classList.toggle('touch-mode', startMode === 'touch');
   window.addEventListener('pointerdown', e => {
@@ -191,7 +222,7 @@ function boot() {
       game.persist();
     }
   });
-  setSoundEnabled(game.save.sound);
+  setSoundEnabled(game.prefs.sound);
 
   if (testMode) {
     import('./autotest.js').then(m => m.run({ game, input, view, ctx, hud, params }));

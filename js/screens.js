@@ -8,6 +8,7 @@ import {
 import { drawPortrait } from './hero.js';
 import { createKeyboard, keyName, GAME_KEY_ROLES } from './keyboard-view.js';
 import { input } from './input.js';
+import { listSlots, deleteSlot } from './save.js';
 
 function h(html) {
   const t = document.createElement('template');
@@ -104,13 +105,105 @@ function titleScreen(game) {
     </div>`);
   const start = () => {
     sfx.confirm();
-    const firstTime = !game.save.tutorialDone && game.save.cleared < 0;
-    if (!firstTime) game.show('town');
-    else if (game.inputMode === 'touch') game.startStage(0); // the in-battle hints explain touch controls
-    else game.show('guide', { first: true });
+    game.show('slots');
   };
   el.addEventListener('click', start);
   return { el, onKey(code) { if (code === 'Enter' || code === 'Space') start(); } };
+}
+
+// ---------------------------------------------------------------------------
+
+function slotsScreen(game, { start = null, deleted = 0 } = {}) {
+  const slots = listSlots();
+  const when = t => (t ? new Date(t).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '');
+  const card = (s, i) => {
+    if (!s) {
+      return `
+        <div class="slot empty">
+          <div class="slot-no">슬롯 ${i + 1}</div>
+          <div class="slot-new">✨</div>
+          <div class="slot-title">비어 있어요</div>
+          <div class="slot-sub">눌러서 새로 시작</div>
+        </div>`;
+    }
+    const progress = s.cleared >= 0 ? `${stageInfo(s.cleared).label}까지 클리어` : '아직 클리어한 스테이지 없음';
+    return `
+      <div class="slot">
+        <div class="slot-no">슬롯 ${i + 1}</div>
+        <canvas class="portrait"></canvas>
+        <div class="slot-title">Lv ${s.level}</div>
+        <div class="slot-sub">⭐ ${progress}</div>
+        <div class="slot-sub">💰 ${fmtNum(s.gold)}</div>
+        <div class="slot-time">${when(s.updatedAt)}</div>
+        <button class="slot-del" type="button">🗑 지우기</button>
+      </div>`;
+  };
+  const el = h(`
+    <div class="screen slots">
+      ${backBtn('← 처음으로')}
+      <div class="panel slots-panel">
+        <h2>💾 어느 슬롯으로 할까요?</h2>
+        <div class="slot-row">${slots.map(card).join('')}</div>
+        <div class="msg"></div>
+      </div>
+      ${hintbar([`${kc('←')}${kc('→')} 고르기`, `${kc('Enter')} 시작`, `${kc('X')} 지우기`, `${kc('Esc')} 처음으로`])}
+    </div>`);
+  const cards = [...el.querySelectorAll('.slot')];
+  let confirm = null; // the "really delete?" dialog while it is open
+
+  const askDelete = i => {
+    if (!slots[i]) { sfx.denied(); return; }
+    sfx.select();
+    const dlg = h(`
+      <div class="confirm">
+        <div class="panel confirm-panel">
+          <h2>🗑 슬롯 ${i + 1}을 지울까요?</h2>
+          <p>Lv ${slots[i].level} 캐릭터가 사라지고, 되돌릴 수 없어요.</p>
+          <div class="list compact">
+            <div class="item"><div class="mid"><div class="name">아니요, 그냥 둘래요</div></div></div>
+            <div class="item danger"><div class="mid"><div class="name">🗑 네, 지울래요</div></div></div>
+          </div>
+        </div>
+      </div>`);
+    el.appendChild(dlg);
+    const close = () => { dlg.remove(); confirm = null; };
+    const m = menu([...dlg.querySelectorAll('.item')], {
+      onSelect: k => {
+        close();
+        if (k === 1) {
+          deleteSlot(i + 1);
+          sfx.error();
+          game.show('slots', { start: i, deleted: i + 1 });
+        } else {
+          sfx.select();
+        }
+      },
+    });
+    confirm = { key: code => { if (isBack(code)) { close(); sfx.select(); } else m.key(code); } };
+  };
+
+  const nav = menu(cards, {
+    cols: slots.length,
+    start: start ?? Math.min(slots.length - 1, Math.max(0, game.prefs.lastSlot - 1)),
+    onSelect: i => { sfx.confirm(); game.openSlot(i + 1); },
+  });
+  if (deleted) message(el, `슬롯 ${deleted}을 지웠어요`);
+  cards.forEach((c, i) => c.querySelector('.slot-del')?.addEventListener('click', e => {
+    e.stopPropagation(); // don't also open the slot
+    askDelete(i);
+  }));
+  return {
+    el,
+    mount() {
+      cards.forEach((c, i) => { if (slots[i]) drawPortrait(c.querySelector('.portrait'), slots[i].gear); });
+    },
+    onKey(code) {
+      if (confirm) { confirm.key(code); return; }
+      if (isBack(code)) { sfx.select(); game.show('title'); return; }
+      if (code === 'KeyX' || code === 'Delete') { askDelete(nav.index); return; }
+      nav.key(code);
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -144,14 +237,15 @@ function townScreen(game) {
     { icon: '🔨', name: '대장간', sub: '골드로 장비를 강화해요', go: () => game.show('smithy') },
     { icon: '✨', name: '스킬', sub: s.sp > 0 ? `스킬 포인트 ${s.sp}개를 쓸 수 있어요!` : '스킬을 강하게 만들어요', badge: s.sp, go: () => game.show('skills') },
     { icon: '⌨️', name: '키보드 연습장', sub: '키 위치를 익혀요', go: () => game.show('guide') },
-    { icon: s.sound ? '🔊' : '🔇', name: `소리: ${s.sound ? '켜짐' : '꺼짐'}`, sub: 'Enter로 바꾸기', go: () => { game.setSound(!s.sound); game.show('town'); } },
+    { icon: game.prefs.sound ? '🔊' : '🔇', name: `소리: ${game.prefs.sound ? '켜짐' : '꺼짐'}`, sub: '눌러서 바꾸기', go: () => { game.setSound(!game.prefs.sound); game.show('town'); } },
+    { icon: '🚪', name: '저장하고 나가기', sub: '처음 화면으로 돌아가요', go: () => game.exitToTitle() },
   ];
   const el = h(`
     <div class="screen town">
       <div class="panel town-panel">
         ${heroCard(s)}
         <div class="town-menu">
-          <h2>🏰 마을</h2>
+          <h2>🏰 마을 <small class="slot-tag">슬롯 ${game.slot ?? '-'}</small></h2>
           <div class="list">
             ${items.map(it => `
               <div class="item">
@@ -563,6 +657,7 @@ export function skillIntroPopup(game, id) {
 
 export const SCREENS = {
   title: titleScreen,
+  slots: slotsScreen,
   town: townScreen,
   stages: stagesScreen,
   smithy: smithyScreen,

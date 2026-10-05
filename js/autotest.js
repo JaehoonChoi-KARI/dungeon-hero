@@ -2,7 +2,7 @@
 //   ?autotest      → simulates whole stages with a bot and prints a JSON report into the page
 //   ?shot=battle   → freezes a scene for a screenshot (title, town, stages, smithy, skills, guide, battle, intro, result)
 
-import { defaultSave } from './save.js';
+import { defaultSave, writeSlot, deleteSlot, listSlots, migrateLegacySave } from './save.js';
 
 const ARROWS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
 
@@ -137,6 +137,51 @@ function touchTest(env) {
   return { touchMode: mode, moved, axisAfter, qFired, swings, spaceReleased, popupOpen, popupClosedAndFired };
 }
 
+// Save slots: continue, new game, delete (with confirmation), and v1.0.0 save migration.
+function slotTest(env) {
+  const { game } = env;
+  const key = code => game.screen.onKey(code, false);
+  const r = {};
+  for (const n of [1, 2, 3]) deleteSlot(n);
+  game.prefs.lastSlot = 1;
+
+  localStorage.setItem('dungeonHero.save.v1', JSON.stringify({ level: 7, gold: 99, tutorialDone: true, sound: false }));
+  migrateLegacySave();
+  const migrated = listSlots()[0];
+  r.migrated = !!migrated && migrated.level === 7 && migrated.gold === 99 && localStorage.getItem('dungeonHero.save.v1') === null;
+
+  writeSlot(2, strongSave(12, 5));
+  game.show('slots');
+  key('ArrowRight');
+  key('Enter');
+  r.continued = game.slot === 2 && game.save.level === 12 && game.screenName === 'town';
+
+  game.exitToTitle();
+  r.exited = game.screenName === 'title' && game.slot === null;
+
+  game.show('slots');
+  key('ArrowRight');
+  key('ArrowRight');
+  key('Enter');
+  r.newGame = game.slot === 3 && game.save.level === 1 && game.screenName === 'guide';
+
+  game.prefs.lastSlot = 2; // the slots screen opens on the last used slot
+  game.show('slots');
+  key('KeyX');
+  const dialog = !!document.querySelector('.confirm');
+  key('Escape'); // cancel keeps the slot
+  const kept = !!listSlots()[1];
+  key('KeyX');
+  key('ArrowDown');
+  key('Enter');
+  r.deleteNeedsConfirm = dialog && kept;
+  r.deleted = listSlots()[1] === null && game.screenName === 'slots';
+
+  for (const n of [1, 2, 3]) deleteSlot(n);
+  game.slot = null;
+  return r;
+}
+
 function report(data) {
   const out = document.createElement('pre');
   out.id = 'test-out';
@@ -154,7 +199,8 @@ export function run(env) {
 
   const log = [];
   try {
-    for (const name of ['title', 'town', 'stages', 'smithy', 'skills', 'guide', 'pause']) {
+    for (const n of [1, 2, 3]) deleteSlot(n);
+    for (const name of ['title', 'slots', 'town', 'stages', 'smithy', 'skills', 'guide', 'pause']) {
       game.show(name);
       game.screen.onKey('ArrowDown', false);
       game.screen.onKey('ArrowRight', false);
@@ -179,6 +225,7 @@ export function run(env) {
     game.show('town');
     log.push(`after upgrades: weapon=${game.save.gear.weapon} atkSkill=${game.save.skills.atk} sp=${game.save.sp}`);
     log.push(touchTest(env));
+    log.push(slotTest(env));
   } catch (e) {
     errors.push(e.stack || String(e));
   }
@@ -237,8 +284,20 @@ function setupShot(env, shot) {
     case 'result':
       game.show('result', { stageIndex: 3, cleared: true, kills: 17, gold: 120, xp: 80, levels: 2, unlocked: ['q'], clearBonus: 60, firstClear: true });
       break;
+    case 'slots': {
+      const a = strongSave(12, 7);
+      a.cleared = 13;
+      writeSlot(1, a);
+      writeSlot(2, strongSave(3, 0));
+      deleteSlot(3);
+      game.show('slots');
+      break;
+    }
     default:
-      if (shot !== 'title') game.save = strongSave(12, 7);
+      if (shot !== 'title') {
+        game.save = strongSave(12, 7);
+        game.slot = 1;
+      }
       game.show(shot);
   }
 }

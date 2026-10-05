@@ -1,6 +1,14 @@
-// Save data lives in this device's localStorage.
+// Save data lives in this device's localStorage: three fixed save slots plus
+// device-wide preferences (sound, keyboard/touch layout, last used slot).
 
-const KEY = 'dungeonHero.save.v1';
+export const SLOT_COUNT = 3;
+const LEGACY_KEY = 'dungeonHero.save.v1'; // the single save used by v1.0.0
+let prefix = 'dungeonHero.';
+const slotKey = n => `${prefix}slot.${n}`;
+const prefsKey = () => `${prefix}prefs`;
+
+// The smoke test uses separate keys so it never touches real saves.
+export function useTestStorage() { prefix = 'dungeonHero.test.'; }
 
 export function defaultSave() {
   return {
@@ -13,11 +21,14 @@ export function defaultSave() {
     gear: { weapon: 0, armor: 0, boots: 0, ring: 0 },
     cleared: -1, // highest cleared stage index
     kills: 0,
-    sound: true,
     tutorialDone: false,
     kbBest: 0, // best streak in the keyboard practice screen
-    inputMode: 'keyboard', // 'keyboard' | 'touch' — whichever was used last
+    updatedAt: 0, // last time this slot was saved (ms)
   };
+}
+
+export function defaultPrefs() {
+  return { sound: true, inputMode: 'keyboard', lastSlot: 1 };
 }
 
 function merge(base, data) {
@@ -33,14 +44,58 @@ function merge(base, data) {
   return base;
 }
 
-export function loadSave() {
+function read(key) {
   try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) return merge(defaultSave(), JSON.parse(raw));
-  } catch { /* fall through to a fresh save */ }
-  return defaultSave();
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
 }
 
-export function writeSave(save) {
-  try { localStorage.setItem(KEY, JSON.stringify(save)); } catch { /* storage full or blocked */ }
+function write(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage full or blocked */ }
+}
+
+function remove(key) {
+  try { localStorage.removeItem(key); } catch { /* blocked */ }
+}
+
+// null = empty slot
+export function loadSlot(n) {
+  const d = read(slotKey(n));
+  return d ? merge(defaultSave(), d) : null;
+}
+
+export function writeSlot(n, save) {
+  save.updatedAt = Date.now();
+  write(slotKey(n), save);
+}
+
+export function deleteSlot(n) { remove(slotKey(n)); }
+
+export function listSlots() {
+  return Array.from({ length: SLOT_COUNT }, (_, i) => loadSlot(i + 1));
+}
+
+export function loadPrefs() {
+  const d = read(prefsKey());
+  return d ? merge(defaultPrefs(), d) : defaultPrefs();
+}
+
+export function writePrefs(prefs) { write(prefsKey(), prefs); }
+
+// v1.0.0 kept one save under a single key: move it into the first empty slot, once.
+export function migrateLegacySave() {
+  const old = read(LEGACY_KEY);
+  if (!old) return;
+  const prefs = loadPrefs();
+  if (typeof old.sound === 'boolean') prefs.sound = old.sound;
+  if (old.inputMode === 'keyboard' || old.inputMode === 'touch') prefs.inputMode = old.inputMode;
+  const free = listSlots().findIndex(s => !s);
+  if (free < 0) return; // every slot is taken; keep the old save rather than lose it
+  writeSlot(free + 1, merge(defaultSave(), old));
+  prefs.lastSlot = free + 1;
+  writePrefs(prefs);
+  remove(LEGACY_KEY);
 }

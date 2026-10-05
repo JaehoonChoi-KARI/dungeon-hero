@@ -1,7 +1,7 @@
 // Offline support: serve from cache right away, refresh the cache in the background.
 // A game update shows up on the launch after the one that downloaded it.
 
-const CACHE = 'dungeon-hero-1.0.0'; // keep in sync with VERSION in js/data.js
+const CACHE = 'dungeon-hero-1.1.0'; // keep in sync with VERSION in js/data.js
 const ASSETS = [
   './',
   './index.html',
