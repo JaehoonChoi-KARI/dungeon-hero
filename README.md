@@ -1,0 +1,50 @@
+# 던전 용사
+
+아이패드용 액션 RPG입니다. 가족이 개인적으로 쓰려고 만들었습니다.
+방향키로 이동하고, Space로 공격하고, Q/W/E/R은 레벨업하면서 하나씩 배웁니다.
+
+키보드와 터치를 둘 다 지원합니다. 마지막으로 쓴 입력 방식에 맞춰 화면이 자동으로 바뀝니다.
+- 키를 누르면 키보드 화면이 됩니다.
+- 화면을 터치하면 왼쪽에 가상 조이스틱, 오른쪽 아래에 ⚔️/Q/W/E/R 버튼이 생깁니다.
+- PC에서 터치 화면을 확인하려면 주소 뒤에 `?touch=1`을 붙입니다.
+
+**플레이 주소: https://jaehoonchoi-kari.github.io/dungeon-hero/**
+
+아이패드/아이폰 Safari에서 위 주소를 열고 공유 버튼 → "홈 화면에 추가"를 누르면 앱처럼 설치됩니다.
+한 번 열고 나면 인터넷이 없어도 실행됩니다.
+
+## 새 버전 배포
+
+1. `js/data.js`의 `VERSION`과 `sw.js`의 `CACHE`를 같은 새 버전으로 올립니다.
+2. 커밋하고 `main`에 push합니다. GitHub Pages가 1~2분 안에 반영합니다.
+3. 아이 기기에서는 게임을 한 번 실행하면 새 버전을 내려받고, 그다음 실행부터 새 버전이 적용됩니다.
+
+- 빌드 도구 없음: HTML / CSS / JavaScript(ES modules)만 사용
+- 저장: 기기의 localStorage (`dungeonHero.save.v1`)
+- 오프라인: HTTPS로 호스팅하면 `sw.js`가 파일을 캐시
+
+## PC에서 실행 / 같은 Wi-Fi의 아이패드에서 테스트
+
+```powershell
+pwsh -File serve.ps1          # http://localhost:8000 과 아이패드용 주소를 출력
+```
+
+ES module을 쓰기 때문에 `index.html`을 더블클릭해서 열면 동작하지 않습니다. 서버로 열어야 합니다.
+로컬 주소(http)에서는 오프라인 캐시가 동작하지 않습니다.
+
+## 자동 테스트
+
+- `http://localhost:8000/?autotest=1`: 봇이 1-1, 1-5, 5-5 스테이지를 끝까지 플레이하고 결과 JSON을 페이지에 출력
+- `http://localhost:8000/?shot=battle`: 스크린샷용 장면을 고정. 이름은 `title`, `town`, `stages`, `smithy`, `skills`, `guide`, `battle`, `boss`, `tutorial`, `intro`, `result`
+
+## 파일
+
+| 파일 | 내용 |
+|---|---|
+| `js/data.js` | 몬스터·스테이지·스킬·장비 수치와 성장 공식 (밸런스는 여기서 조정) |
+| `js/battle.js` | 전투 (이동, 스킬, 몬스터 AI, 보스 패턴, 그리기) |
+| `js/screens.js` | 메뉴 화면 (마을, 대장간, 스킬, 스테이지 선택, 키보드 연습장) |
+| `js/hero.js` | 주인공 그리기 (장비 단계에 따라 모습이 바뀜) |
+| `js/keyboard-view.js` | 화면 속 키보드 |
+| `js/touch.js` | 터치 조작 (가상 조이스틱, 스킬 버튼) |
+| `tools/icon.html` | 앱 아이콘 생성용 페이지 |
