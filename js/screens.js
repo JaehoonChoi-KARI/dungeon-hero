@@ -101,13 +101,19 @@ function titleScreen(game) {
         <p class="note">⌨️ 키보드로도, 👆 터치로도 할 수 있어요</p>
         ${ios && !installed ? '<p class="install">📲 Safari 공유 버튼 → <b>홈 화면에 추가</b> 하면 앱처럼 쓸 수 있어요</p>' : ''}
       </div>
-      <div class="version">v${VERSION}</div>
+      <button class="version" type="button">v${VERSION} · ↻ 업데이트 확인</button>
     </div>`);
   const start = () => {
     sfx.confirm();
     game.show('slots');
   };
   el.addEventListener('click', start);
+  const ver = el.querySelector('.version');
+  ver.addEventListener('click', e => {
+    e.stopPropagation(); // don't also start the game
+    ver.textContent = '확인 중...';
+    game.checkForUpdate();
+  });
   return { el, onKey(code) { if (code === 'Enter' || code === 'Space') start(); } };
 }
 

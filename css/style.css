@@ -210,7 +210,19 @@ h2 { margin: 0 0 14px; font-size: 26px; font-weight: 900; }
 .press { margin-top: 40px; font-size: clamp(20px, 2.6vw, 28px); font-weight: 800; animation: blink 1.2s infinite; }
 .note { color: var(--muted); margin-top: 18px; }
 .install { margin-top: 10px; background: rgba(255, 255, 255, 0.08); padding: 10px 16px; border-radius: 12px; display: inline-block; color: #d6d8ff; }
-.version { position: absolute; right: var(--safe-r); bottom: var(--safe-b); color: rgba(255, 255, 255, 0.35); font-size: 13px; font-weight: 700; }
+.version {
+  position: absolute;
+  right: var(--safe-r);
+  bottom: var(--safe-b);
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.2);
+  color: rgba(255, 255, 255, 0.55);
+  font: 700 13px var(--font);
+  cursor: pointer;
+  touch-action: manipulation;
+}
 .title-float { position: absolute; font-size: clamp(60px, 10vw, 110px); opacity: 0.22; animation: float 6s ease-in-out infinite; }
 .title-float.a { left: 8%; top: 14%; }
 .title-float.b { right: 9%; top: 24%; animation-delay: -2s; }

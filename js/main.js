@@ -44,6 +44,22 @@ const game = {
   townIndex: 0,
   testGod: false,
   inputMode: 'keyboard',
+  updateReady: false,
+
+  applyUpdateIfIdle() {
+    if (this.updateReady && !this.battle && (this.screenName === 'title' || this.screenName === 'slots')) {
+      location.reload();
+    }
+  },
+
+  // Title screen's version label: look for a new version right now.
+  async checkForUpdate() {
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration();
+      await reg?.update();
+    } catch { /* offline: just reload from cache */ }
+    location.reload();
+  },
 
   persist() {
     if (!testMode && this.slot) writeSlot(this.slot, this.save);
@@ -93,6 +109,7 @@ const game = {
     uiRoot.appendChild(scr.el);
     scr.el.querySelector('.back-btn')?.addEventListener('click', () => scr.onKey('Escape', false));
     scr.mount?.();
+    this.applyUpdateIfIdle();
   },
 
   hideScreen() {
@@ -199,6 +216,25 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
+function setupServiceWorker() {
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    // iPad keeps home-screen apps suspended instead of relaunching them, so also look for
+    // a new version whenever the app comes back to the foreground.
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) reg.update().catch(() => {});
+    });
+  }).catch(() => {});
+
+  // A newer version took over while the app was open: reload, but only on the title or
+  // slot screen so a fight is never interrupted (otherwise it waits for the next title visit).
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; } // first install, nothing to refresh
+    game.updateReady = true;
+    game.applyUpdateIfIdle();
+  });
+}
+
 function boot() {
   resize();
   window.addEventListener('resize', resize);
@@ -230,7 +266,7 @@ function boot() {
     game.show('title');
     try { navigator.storage?.persist?.(); } catch { /* best effort */ }
     const secure = location.protocol === 'https:' || location.hostname === 'localhost';
-    if ('serviceWorker' in navigator && secure) navigator.serviceWorker.register('sw.js').catch(() => {});
+    if ('serviceWorker' in navigator && secure) setupServiceWorker();
   }
   requestAnimationFrame(frame);
 }

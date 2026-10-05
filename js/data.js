@@ -1,6 +1,6 @@
 // Game data tables and progression formulas.
 
-export const VERSION = '1.1.0'; // keep in sync with CACHE in sw.js
+export const VERSION = '1.1.1'; // keep in sync with CACHE in sw.js
 
 export const STAGES_PER_WORLD = 5;
 export const MAX_LEVEL = 50;
