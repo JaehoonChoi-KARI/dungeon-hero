@@ -1,6 +1,6 @@
 // DOM heads-up display shown during battle.
 
-import { SKILLS, SKILL_ORDER, WEAPON_CATS, POTIONS, POTION_ORDER, xpNeed, MAX_LEVEL, fmtNum } from './data.js';
+import { SKILLS, SKILL_ORDER, WEAPON_CATS, POTIONS, POTION_ORDER, BUFFS, BUFF_ORDER, xpNeed, MAX_LEVEL, fmtNum } from './data.js';
 
 export function createHud(root, { onPause }) {
   root.innerHTML = `
@@ -9,6 +9,7 @@ export function createHud(root, { onPause }) {
       <div class="hud-row"><span class="hud-lv"></span><span class="hud-gold"></span></div>
       <div class="bar hp"><i></i><span></span></div>
       <div class="bar xp"><i></i><span></span></div>
+      <div class="hud-buffs"></div>
     </div>
     <div class="hud-stage glass">
       <div class="hud-stage-title"></div>
@@ -46,7 +47,7 @@ export function createHud(root, { onPause }) {
     xpFill: $('.bar.xp i'), xpText: $('.bar.xp span'),
     stageTitle: $('.hud-stage-title'), stage: $('.hud-stage'),
     progFill: $('.bar.prog i'), progText: $('.bar.prog span'),
-    hint: $('.hud-hint'), toast: $('.hud-toast'),
+    hint: $('.hud-hint'), toast: $('.hud-toast'), buffs: $('.hud-buffs'),
     skills: Object.fromEntries(SKILL_ORDER.map(id => {
       const s = root.querySelector(`.skill[data-id="${id}"]`);
       return [id, { root: s, cd: s.querySelector('.cd'), cdt: s.querySelector('.cdt') }];
@@ -115,6 +116,9 @@ export function createHud(root, { onPause }) {
         set('pc' + id, String(n), v => (po.cnt.textContent = v));
         set('pe' + id, n <= 0, v => po.root.classList.toggle('empty', v));
       }
+      const buffs = BUFF_ORDER.filter(k => b.buffs[k] > 0)
+        .map(k => `<span class="buff" style="--bc:${BUFFS[k].color}">${BUFFS[k].icon} ${Math.ceil(b.buffs[k])}</span>`).join('');
+      set('buffs', buffs, v => (el.buffs.innerHTML = v));
       set('power', b.powerT > 0 ? String(Math.ceil(b.powerT)) : '', v => {
         el.potions.atk.ptime.textContent = v;
         el.potions.atk.root.classList.toggle('active', !!v);

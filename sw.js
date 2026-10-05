@@ -1,7 +1,7 @@
 // Offline support. Online: always ask the server first, so a new version shows up on the
 // very next launch. Offline (or a server slower than 4s): use the cached copy.
 
-const CACHE = 'dungeon-hero-1.2.0'; // keep in sync with VERSION in js/data.js
+const CACHE = 'dungeon-hero-1.3.0'; // keep in sync with VERSION in js/data.js
 const ASSETS = [
   './',
   './index.html',

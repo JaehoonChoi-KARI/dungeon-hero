@@ -1,6 +1,6 @@
 // Game data tables and progression formulas.
 
-export const VERSION = '1.2.0'; // keep in sync with CACHE in sw.js
+export const VERSION = '1.3.0'; // keep in sync with CACHE in sw.js
 
 export const STAGES_PER_WORLD = 5;
 export const MAX_LEVEL = 50;
@@ -170,6 +170,25 @@ export function gearName(id, n) {
   if (n > TRANSCEND_FROM) return `+${n} ✦${name}`;
   return n > 0 ? `+${n} ${name}` : name;
 }
+
+// ---- Regular monster drops: one of gold / heart / buff circle ---------------
+// Gold comes 20% less often, so it pays 1/0.8 = 1.25x when it does: average gold is unchanged.
+
+export const DROP_GOLD = 0.8;
+export const DROP_HEART = 0.08; // the remaining 0.12 is a buff circle
+export const GOLD_DROP_BONUS = 1 / DROP_GOLD;
+export const HEART_HEAL = 0.1; // small; potions are the big heal
+
+export const BUFF_TIME = 7; // seconds a buff lasts once picked up
+export const BUFF_ZONE_TIME = 10; // seconds a circle stays on the ground
+export const BUFF_RADIUS = 90; // about five heroes across
+export const BUFFS = {
+  atk: { name: '공격력', icon: '⚔️', color: '#ff8a3d', text: '공격력 +10%' },
+  def: { name: '방어력', icon: '🛡️', color: '#4fb4ff', text: '받는 피해 -10%' },
+  spd: { name: '이동 속도', icon: '👟', color: '#5be37d', text: '이동 속도 +10%' },
+};
+export const BUFF_ORDER = ['atk', 'def', 'spd'];
+export const BUFF_ATK = 1.1, BUFF_DEF = 0.9, BUFF_SPD = 1.1;
 
 // ---- Potions (shop in town, numbers 1 and 2 in battle) ---------------------
 

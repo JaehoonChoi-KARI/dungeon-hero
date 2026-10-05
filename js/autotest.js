@@ -263,6 +263,53 @@ function economyTest(env) {
   return r;
 }
 
+// Regular monster drops (gold 80% paid 1.25x / heart 8% / buff circle 12%) and buff pickup.
+function dropTest(env) {
+  const { game, input } = env;
+  game.save = strongSave(10, 5);
+  game.startStage(3);
+  const b = game.battle;
+  const N = 20000, base = 10;
+  let gold = 0, golds = 0;
+  for (let i = 0; i < N; i++) {
+    const before = b.pickups.length;
+    b.dropLoot({ x: 100, y: 100 }, base);
+    const added = b.pickups.slice(before);
+    if (added.length && added[0].type === 'gold') { golds++; gold += added.reduce((a, k) => a + k.value, 0); }
+  }
+  const hearts = b.pickups.filter(k => k.type === 'heart').length;
+  const zones = b.buffZones.length;
+  const r = {
+    goldShare: +(golds / N).toFixed(3), heartShare: +(hearts / N).toFixed(3), buffShare: +(zones / N).toFixed(3),
+    avgGoldPerKill: +(gold / N).toFixed(2), // should stay ≈ base (10)
+  };
+  b.pickups = [];
+  b.buffZones = [];
+
+  // walking into a speed circle makes the hero faster for a while
+  const p = b.player;
+  const move = () => {
+    const x0 = p.x;
+    input.simulateDown('ArrowRight');
+    for (let i = 0; i < 30; i++) { b.update(1 / 60); input.endFrame(); }
+    input.simulateUp('ArrowRight');
+    return p.x - x0;
+  };
+  b.enemies = [];
+  b.spawned = 999; // no more spawns during the measurement
+  p.x = 600;
+  const plain = move();
+  p.x = 600;
+  b.buffZones.push({ kind: 'spd', x: p.x, y: p.y, t: 10 });
+  b.update(1 / 60);
+  r.buffPicked = b.buffs.spd > 6 && b.buffZones.length === 0;
+  p.x = 600;
+  const fast = move();
+  r.speedBuffRatio = +(fast / plain).toFixed(2); // ≈ 1.1
+  game.quitToTown();
+  return r;
+}
+
 // Weapons: roll rules, every weapon type clearing a stage, the weapon menu, drops, old-save upgrade.
 function weaponTest(env) {
   const { game } = env;
@@ -421,6 +468,7 @@ export function run(env) {
     log.push(gemScreenTest(env));
     log.push(economyTest(env));
     log.push(weaponTest(env));
+    log.push(dropTest(env));
   } catch (e) {
     errors.push(e.stack || String(e));
   }
@@ -495,6 +543,17 @@ function setupShot(env, shot) {
       game.slot = 1;
       game.show('gems');
       game.screen.onKey('KeyF', false);
+      break;
+    }
+    case 'buffs': {
+      fight(3, strongSave(8, 6), 5);
+      const b = game.battle, p = b.player;
+      b.buffZones.push({ kind: 'atk', x: p.x + 220, y: p.y - 60, t: 9 }, { kind: 'def', x: p.x - 230, y: p.y + 90, t: 9 },
+        { kind: 'spd', x: p.x + 60, y: p.y + 230, t: 9 });
+      b.buffs.atk = 5.2;
+      b.buffs.spd = 2.4;
+      b.pickups.push({ type: 'heart', x: p.x - 90, y: p.y - 70, vx: 0, vy: 0, t: 0, value: 0 });
+      freeze();
       break;
     }
     case 'weapons': {

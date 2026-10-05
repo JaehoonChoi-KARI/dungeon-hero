@@ -35,6 +35,7 @@ export function defaultSave() {
     nextWeaponId: 2,
     weaponSeenId: 1,
     potions: { hp: 0, atk: 0 },
+    seenBuff: false, // first buff circle shows a one-time hint
     updatedAt: 0, // last time this slot was saved (ms)
   };
 }

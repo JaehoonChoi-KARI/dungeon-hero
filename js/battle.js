@@ -3,7 +3,9 @@
 import { input } from './input.js';
 import { sfx } from './audio.js';
 import {
-  MONSTERS, WORLDS, SKILLS, WEAPON_CATS, POTIONS, equippedWeapon, POTION_ORDER, POTION_HEAL, POWER_TIME, POWER_MULT,
+  MONSTERS, WORLDS, SKILLS, WEAPON_CATS, POTIONS, equippedWeapon,
+  DROP_GOLD, DROP_HEART, GOLD_DROP_BONUS, HEART_HEAL, BUFFS, BUFF_ORDER, BUFF_TIME, BUFF_ZONE_TIME, BUFF_RADIUS,
+  BUFF_ATK, BUFF_DEF, BUFF_SPD, POTION_ORDER, POTION_HEAL, POWER_TIME, POWER_MULT,
   stageInfo, computeStats, skillParams, xpNeed, MAX_LEVEL,
 } from './data.js';
 import { emojiSprite, drawSprite } from './sprites.js';
@@ -115,6 +117,8 @@ export class Battle {
     this.shake = 0;
     this.flashScreen = 0;
     this.powerT = 0; // 힘의 물약: extra damage while > 0
+    this.buffs = { atk: 0, def: 0, spd: 0 }; // seconds left from buff circles
+    this.buffZones = [];
     this.earned = { gold: 0, xp: 0, levels: 0, unlocked: [], clearBonus: 0, firstClear: false, gems: [], weapons: [] };
     this.cam = { x: this.player.x, y: this.player.y };
     this.deco = makeDeco(this.world);
@@ -162,6 +166,7 @@ export class Battle {
     this.updateShots(dt);
     this.updateFireballs(dt);
     this.updateMissiles(dt);
+    this.updateBuffs(dt);
     this.updateZones(dt);
     this.updateStorms(dt);
     this.updatePickups(dt);
@@ -234,7 +239,7 @@ export class Battle {
       }
       if (d.t <= 0) p.dash = null;
     } else if (p.moving) {
-      const speed = this.stats.speed * (p.hasteT > 0 ? 1.4 : 1);
+      const speed = this.stats.speed * (p.hasteT > 0 ? 1.4 : 1) * (this.buffs.spd > 0 ? BUFF_SPD : 1);
       p.x += mx * speed * dt;
       p.y += my * speed * dt;
       if (p.hasteT > 0 && Math.random() < 0.5) p.trail.push({ x: p.x, y: p.y, t: 0.1 });
@@ -528,7 +533,7 @@ export class Battle {
     const st = this.stats;
     const crit = Math.random() < st.crit + critBonus;
     if (slow) e.slowT = Math.max(e.slowT || 0, slow);
-    const power = this.powerT > 0 ? POWER_MULT : 1;
+    const power = (this.powerT > 0 ? POWER_MULT : 1) * (this.buffs.atk > 0 ? BUFF_ATK : 1);
     const dmg = Math.max(1, Math.round(st.atk * mult * power * rand(0.9, 1.1) * (crit ? 2 : 1)));
     e.hp -= dmg;
     e.flash = 1;
@@ -548,17 +553,52 @@ export class Battle {
     this.burst(e.x, e.y, '#ffffff', 12, 260);
     this.effects.push({ type: 'poof', x: e.x, y: e.y, r: e.r * 1.6, t: 0, dur: 0.35 });
     this.gainXp(Math.max(1, Math.round(e.xp)));
-    this.dropGold(e.x, e.y, Math.max(1, Math.round(e.gold * this.stats.goldBonus)));
+    const gold = e.gold * this.stats.goldBonus;
+    if (e.kind === 'mob' || e.kind === 'minion') this.dropLoot(e, gold);
+    else this.dropGold(e.x, e.y, Math.max(1, Math.round(gold)));
     if (e.kind === 'mob') {
       this.kills++;
       this.save.kills++;
-      if (Math.random() < 0.05) this.pickups.push({ type: 'heart', x: e.x, y: e.y, vx: 0, vy: 0, t: 0, value: 0 });
     }
     if (e.isStageBoss) {
       this.onBossDefeated(e);
       this.dropGem(e);
       this.dropWeapon(e);
     }
+  }
+
+  // Regular monsters drop exactly one thing: gold (80%, paid 1.25x), a heart (8%) or a buff circle (12%).
+  dropLoot(e, gold) {
+    const r = Math.random();
+    if (r < DROP_GOLD) {
+      this.dropGold(e.x, e.y, Math.max(1, Math.round(gold * GOLD_DROP_BONUS)));
+    } else if (r < DROP_GOLD + DROP_HEART) {
+      this.pickups.push({ type: 'heart', x: e.x, y: e.y, vx: 0, vy: 0, t: 0, value: 0 });
+    } else {
+      const kind = pick(BUFF_ORDER);
+      this.buffZones.push({ kind, x: e.x, y: e.y, t: BUFF_ZONE_TIME });
+      if (!this.save.seenBuff) {
+        this.save.seenBuff = true;
+        this.showToast('✨ 바닥의 빛나는 원에 들어가면 7초 동안 강해져요!', 3.5);
+      }
+    }
+  }
+
+  // Buff circles wait on the ground; walking into one starts (or refreshes) that buff.
+  updateBuffs(dt) {
+    for (const k of BUFF_ORDER) if (this.buffs[k] > 0) this.buffs[k] -= dt;
+    const p = this.player;
+    for (const z of this.buffZones) {
+      z.t -= dt;
+      if (this.state !== 'play' || dist2(p.x, p.y, z.x, z.y) > BUFF_RADIUS ** 2) continue;
+      z.t = 0;
+      this.buffs[z.kind] = BUFF_TIME;
+      const b = BUFFS[z.kind];
+      this.addText(p.x, p.y - 46, `${b.icon} ${b.text}`, b.color, 22);
+      this.burst(z.x, z.y, b.color, 16, 240);
+      sfx.upgrade();
+    }
+    this.buffZones = this.buffZones.filter(z => z.t > 0);
   }
 
   // World bosses always drop a weapon, 대장 monsters sometimes; it goes straight into the bag.
@@ -633,7 +673,8 @@ export class Battle {
   damagePlayer(raw, fromX, fromY) {
     const p = this.player;
     if (this.state !== 'play' || p.inv > 0 || p.dash) return;
-    const dmg = Math.max(1, Math.round((raw * 100) / (100 + this.stats.def)));
+    const guard = this.buffs.def > 0 ? BUFF_DEF : 1;
+    const dmg = Math.max(1, Math.round(((raw * 100) / (100 + this.stats.def)) * guard));
     p.hp -= dmg;
     p.inv = 0.8;
     this.shake = Math.max(this.shake, 0.18);
@@ -991,7 +1032,7 @@ export class Battle {
         } else if (loot) {
           sfx.upgrade(); // already in the bag (see dropGem); this is just the pickup flourish
         } else if (this.state === 'play') {
-          const heal = Math.round(this.stats.maxHp * 0.25);
+          const heal = Math.round(this.stats.maxHp * HEART_HEAL);
           p.hp = Math.min(this.stats.maxHp, p.hp + heal);
           this.addText(p.x, p.y - 40, `+${heal}`, '#7dffa0', 24);
           sfx.heal();
@@ -1064,6 +1105,7 @@ export class Battle {
     this.drawGround(ctx, cx, cy, vw, vh);
     this.drawTelegraphs(ctx);
     this.drawZones(ctx);
+    this.drawBuffZones(ctx);
     this.drawPickups(ctx);
 
     const p = this.player;
@@ -1216,6 +1258,30 @@ export class Battle {
         ctx.arc(m.x, m.y, 16, 0, TAU);
         ctx.fill();
       }
+    }
+  }
+
+  // Glowing circle with the buff's icon; blinks during its last 3 seconds.
+  drawBuffZones(ctx) {
+    for (const z of this.buffZones) {
+      if (z.t < 3 && Math.floor(z.t * 6) % 2 === 0) continue;
+      const b = BUFFS[z.kind];
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, (BUFF_ZONE_TIME - z.t) * 4); // pop in
+      ctx.fillStyle = b.color;
+      ctx.globalAlpha *= 0.16;
+      ctx.beginPath();
+      ctx.arc(z.x, z.y, BUFF_RADIUS, 0, TAU);
+      ctx.fill();
+      ctx.globalAlpha = 0.8;
+      ctx.strokeStyle = b.color;
+      ctx.lineWidth = 3;
+      ctx.setLineDash([14, 10]);
+      ctx.lineDashOffset = -this.time * 30;
+      ctx.stroke();
+      ctx.restore();
+      const bob = Math.sin(this.time * 5 + z.x) * 4;
+      drawSprite(ctx, emojiSprite(b.icon, 30), z.x, z.y - 6 + bob);
     }
   }
 

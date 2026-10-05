@@ -543,6 +543,9 @@ h2 { margin: 0 0 14px; font-size: 26px; font-weight: 900; }
 .hud-player { position: absolute; top: var(--safe-t); left: var(--safe-l); width: 260px; padding: 10px 12px; display: grid; gap: 6px; }
 .hud-row { display: flex; justify-content: space-between; align-items: baseline; font-weight: 900; }
 .hud-lv { color: var(--gold); font-size: 20px; }
+.hud-buffs { display: flex; gap: 6px; min-height: 0; }
+.hud-buffs:empty { display: none; }
+.buff { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--bc); background: rgba(0, 0, 0, 0.35); font-size: 13px; font-weight: 900; color: #fff; }
 .hud-gold { font-size: 17px; }
 .hud-stage { position: absolute; top: var(--safe-t); left: 50%; transform: translateX(-50%); width: min(380px, 38vw); padding: 8px 14px; text-align: center; display: grid; gap: 5px; }
 .hud-stage-title { font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
