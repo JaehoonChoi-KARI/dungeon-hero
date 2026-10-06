@@ -193,6 +193,8 @@ h2 { margin: 0 0 14px; font-size: 26px; font-weight: 900; }
 .bar.hp i { background: linear-gradient(#ff8f8f, #e53950); }
 .bar.xp i { background: linear-gradient(#9be7ff, #3d8bff); }
 .bar.prog i { background: linear-gradient(#ffe38a, #f5a623); }
+.bar.res i { background: var(--rc, #ffd54f); transition: none; }
+.bar.res.empty i { animation: blink 0.5s infinite; background: #ff5c6c; }
 
 /* ---- title ---------------------------------------------------------------- */
 
@@ -419,6 +421,12 @@ h2 { margin: 0 0 14px; font-size: 26px; font-weight: 900; }
 .gem-side .btn-row { margin-top: 4px; justify-content: flex-start; flex-wrap: wrap; }
 .gem-side .btn { padding: 10px 16px; font-size: 16px; }
 .sound-btn { margin-left: 10px; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--item); color: var(--text); font: 700 13px var(--font); cursor: pointer; vertical-align: middle; touch-action: manipulation; }
+
+.tier-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tier-tab { padding: 7px 14px; border-radius: 999px; border: 2px solid var(--line); background: var(--item); color: var(--muted); font: 800 15px var(--font); cursor: pointer; touch-action: manipulation; white-space: nowrap; }
+.tier-tab.on { border-color: var(--tc); color: var(--text); background: var(--item-sel); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.06); }
+.tier-tab.locked { opacity: 0.5; }
+.stages .shop-head h2, .weapons .shop-head h2 { margin: 0; }
 
 .head-right { display: flex; align-items: center; gap: 10px; }
 .fuse-btn { padding: 8px 14px; border-radius: 999px; border: 2px solid var(--line); background: var(--item); color: var(--text); font: 800 15px var(--font); cursor: pointer; touch-action: manipulation; white-space: nowrap; }

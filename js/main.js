@@ -78,7 +78,7 @@ const game = {
     this.prefs.lastSlot = n;
     this.savePrefs();
     this.persist();
-    const firstTime = !this.save.tutorialDone && this.save.cleared < 0;
+    const firstTime = !this.save.tutorialDone && this.save.cleared[0] < 0;
     if (!firstTime) this.show('town');
     else if (this.inputMode === 'touch') this.startStage(0); // the in-battle hints explain touch controls
     else this.show('guide', { first: true });
@@ -118,10 +118,11 @@ const game = {
     this.screenName = '';
   },
 
-  startStage(i) {
+  startStage(i, tier = 0) {
     this.hideScreen();
     this.clearPopups();
-    this.battle = new Battle(this, i);
+    this.stageTier = tier; // the stage screen reopens on this difficulty
+    this.battle = new Battle(this, i, tier);
     this.paused = false;
     input.clear();
     hud.show();

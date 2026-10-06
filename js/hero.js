@@ -1,6 +1,6 @@
 // The player character, drawn with canvas shapes so gear upgrades change its look.
 
-import { gearTier, ARMOR_COLORS } from './data.js';
+import { ARMOR_COLORS, armorBand, itemLevel } from './data.js';
 import { GEM_GRADES } from './gems.js';
 
 const TAU = Math.PI * 2;
@@ -51,11 +51,11 @@ function blade(ctx, from, len, half, color) {
   ctx.stroke();
 }
 
-// Drawn pointing along +x from the hand. Grade sets the accent color; +20 or more glows.
+// Drawn pointing along +x from the hand. Grade sets the accent color; 전설 and 신화 glow.
 function drawWeapon(ctx, x, y, angle, weapon, extend = 0) {
   const cat = weapon ? weapon.cat : 'sword';
   const color = GEM_GRADES[weapon ? weapon.g : 0].color;
-  const glow = weapon && weapon.up >= 20;
+  const glow = weapon && weapon.g >= 3;
   ctx.save();
   ctx.translate(x + Math.cos(angle) * extend, y + Math.sin(angle) * extend);
   ctx.rotate(angle);
@@ -141,9 +141,10 @@ function drawCape(ctx, x, y, fx, tier) {
 }
 
 // p: { x, y, face:{x,y}, faceAngle, moving, walkT, inv, swing, swingAngle, spin, dash }
-// weapon: the equipped weapon item (type, grade and enhancement change how it looks)
-export function drawHero(ctx, p, gear, time, weapon) {
-  const at = gearTier(gear.armor);
+// armor / weapon: the equipped items (armor level band and grades change how the hero looks)
+export function drawHero(ctx, p, armor, time, weapon) {
+  const at = armor ? armorBand(itemLevel(armor)) : 0;
+  const emblem = armor ? GEM_GRADES[armor.g].color : null;
   const cat = weapon ? weapon.cat : 'sword';
   const x = p.x, y = p.y;
   const fx = p.face.x, fy = p.face.y;
@@ -180,8 +181,8 @@ export function drawHero(ctx, p, gear, time, weapon) {
   ctx.stroke();
   ctx.fillStyle = 'rgba(0,0,0,.25)';
   ctx.fillRect(x - 13, by + 16, 26, 4);
-  if (at >= 2 && !back) {
-    ctx.fillStyle = at >= 5 ? '#ffd54f' : 'rgba(255,255,255,.6)';
+  if (emblem && !back) { // chest gem in the armor's grade color
+    ctx.fillStyle = emblem;
     ctx.beginPath();
     ctx.arc(x, by + 9, 3.5, 0, TAU);
     ctx.fill();
@@ -241,7 +242,7 @@ export function drawHero(ctx, p, gear, time, weapon) {
 }
 
 // Draws the hero standing, scaled to fit a portrait canvas (town, smithy, icon).
-export function drawPortrait(canvas, gear, weapon, { bg = null } = {}) {
+export function drawPortrait(canvas, armor, weapon, { bg = null } = {}) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const w = canvas.clientWidth || canvas.width;
   const h = canvas.clientHeight || canvas.height;
@@ -258,5 +259,5 @@ export function drawPortrait(canvas, gear, weapon, { bg = null } = {}) {
   ctx.setTransform(s, 0, 0, s, (canvas.width - 0) / 2, canvas.height / 2 + 4 * s);
   const p = { x: 0, y: 0, face: { x: 0, y: 1 }, faceAngle: Math.PI / 2, moving: false, walkT: 0, inv: 0, swing: 0, swingAngle: 0, spin: 0, dash: null };
   p.faceAngle = -0.6; // hold the weapon up and to the right
-  drawHero(ctx, p, gear, 0, weapon);
+  drawHero(ctx, p, armor, 0, weapon);
 }

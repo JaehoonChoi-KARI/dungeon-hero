@@ -87,6 +87,7 @@ export const sfx = {
   smash() { if (ready('smash', 0.1)) { noise(0.22, { vol: 0.3, freq: 300, to: 80, q: 0.7 }); tone(90, 0.18, { type: 'sine', vol: 0.25, to: 50 }); } },
   bow() { if (ready('bow', 0.05)) { tone(320, 0.08, { type: 'triangle', vol: 0.12, to: 180 }); noise(0.06, { vol: 0.1, freq: 3000 }); } },
   magic() { if (ready('magic', 0.08)) arp([880, 1175, 1568], 0.03, { type: 'sine', vol: 0.07 }); },
+  tired() { if (ready('tired', 0.5)) { tone(330, 0.12, { type: 'triangle', vol: 0.1, to: 220 }); tone(260, 0.16, { type: 'triangle', vol: 0.1, to: 170, delay: 0.12 }); } },
   zap() { if (ready('zap', 0.15)) noise(0.25, { vol: 0.22, freq: 2600, to: 300, q: 0.7 }); },
   shoot() { if (ready('shoot', 0.12)) tone(500, 0.08, { type: 'triangle', vol: 0.05, to: 250 }); },
   select() { if (ready('select', 0.03)) tone(660, 0.05, { vol: 0.07 }); },

@@ -3,15 +3,16 @@
 import { input } from './input.js';
 import { sfx } from './audio.js';
 import {
-  MONSTERS, WORLDS, SKILLS, WEAPON_CATS, POTIONS, equippedWeapon,
+  MONSTERS, WORLDS, SKILLS, WEAPON_CATS, POTIONS, equippedWeapon, equippedArmor,
   DROP_GOLD, DROP_HEART, GOLD_DROP_BONUS, HEART_HEAL, BUFFS, BUFF_ORDER, BUFF_TIME, BUFF_ZONE_TIME, BUFF_RADIUS,
   BUFF_ATK, BUFF_DEF, BUFF_SPD, POTION_ORDER, POTION_HEAL, POWER_TIME, POWER_MULT,
-  stageInfo, computeStats, skillParams, xpNeed, MAX_LEVEL,
+  TIERS, SCALE, stageInfo, computeStats, skillParams, xpNeed, MAX_LEVEL,
+  resourceMax, resourceOf, RES_REFILL, RES_DELAY, AIM_NEAR,
 } from './data.js';
 import { emojiSprite, drawSprite } from './sprites.js';
 import { drawHero, SWING_TIME } from './hero.js';
 import { GEM_GRADES, gemMods, rollGem } from './gems.js';
-import { rollWeapon, weaponName, ELITE_WEAPON_CHANCE } from './weapons.js';
+import { rollEquipment, isWeapon, itemIcon, itemName } from './items.js';
 
 export const MAP_W = 2400;
 export const MAP_H = 1600;
@@ -71,14 +72,18 @@ function makeDeco(world) {
 }
 
 export class Battle {
-  constructor(game, stageIndex) {
+  constructor(game, stageIndex, tier = 0) {
     this.game = game;
     this.save = game.save;
-    this.stage = stageInfo(stageIndex);
+    this.stage = stageInfo(stageIndex, tier);
     this.world = WORLDS[this.stage.world];
     this.stats = computeStats(this.save);
     this.mods = gemMods(this.save);
     this.weapon = equippedWeapon(this.save);
+    const resMax = resourceMax(this.weapon.cat);
+    // Space resource (stamina / arrows / mana): see RESOURCES in data.js
+    this.res = { def: resourceOf(this.weapon.cat), max: resMax, cur: resMax, empty: false, idle: 0, heldEmpty: 0 };
+    this.armor = equippedArmor(this.save);
 
     this.player = {
       x: MAP_W / 2, y: MAP_H / 2, r: 18, hp: this.stats.maxHp,
@@ -119,12 +124,12 @@ export class Battle {
     this.powerT = 0; // 힘의 물약: extra damage while > 0
     this.buffs = { atk: 0, def: 0, spd: 0 }; // seconds left from buff circles
     this.buffZones = [];
-    this.earned = { gold: 0, xp: 0, levels: 0, unlocked: [], clearBonus: 0, firstClear: false, gems: [], weapons: [] };
+    this.earned = { gold: 0, xp: 0, levels: 0, unlocked: [], clearBonus: 0, firstClear: false, gems: [], items: [] };
     this.cam = { x: this.player.x, y: this.player.y };
     this.deco = makeDeco(this.world);
     this.tutorial = !this.save.tutorialDone && stageIndex === 0 ? { step: 0, moved: 0, attacks: 0 } : null;
 
-    this.banner(`${this.stage.label}  ${this.world.name}`, '#ffffff', 2);
+    this.banner(`${this.stage.fullLabel}  ${this.world.name}`, tier > 0 ? TIERS[tier].color : '#ffffff', 2);
   }
 
   // ---- helpers ------------------------------------------------------------
@@ -249,7 +254,7 @@ export class Battle {
     p.x = clamp(p.x, 30, MAP_W - 30);
     p.y = clamp(p.y, 40, MAP_H - 30);
 
-    if (input.isDown('Space') && p.cds.atk <= 0 && !p.dash) this.basicAttack();
+    this.updateResource(dt);
     for (const id of ['q', 'w', 'e', 'r']) {
       if (input.wasPressed(SKILLS[id].code)) this.trySkill(id);
     }
@@ -288,6 +293,44 @@ export class Battle {
 
   targets() {
     return this.enemies.filter(e => !e.dead && e.spawnT <= 0);
+  }
+
+  // Space spends one unit per attack. Letting go refills it (after a short pause);
+  // running dry locks Space until it's full again, like reloading.
+  updateResource(dt) {
+    const p = this.player, r = this.res;
+    const holding = input.isDown('Space');
+    r.idle = holding ? 0 : r.idle + dt;
+    if (!holding && r.idle >= RES_DELAY && r.cur < r.max) {
+      r.cur = Math.min(r.max, r.cur + ((r.max * this.stats.regen) / RES_REFILL) * dt); // armor 자원 회복 speeds it up
+      if (r.cur >= r.max && r.empty) {
+        r.empty = false;
+        this.addText(p.x, p.y - 46, `${r.def.icon} 다 찼어요!`, r.def.color, 18);
+      }
+    }
+    if (!holding) { r.heldEmpty = 0; return; }
+    if (r.empty || r.cur < 1) {
+      // still pressing with nothing left: remind them that letting go is what refills it
+      r.heldEmpty += dt;
+      if (r.heldEmpty > 0.8) {
+        r.heldEmpty = -2;
+        this.showToast(`스페이스에서 손을 떼야 ${r.def.name}${r.def.subj} 채워져요!`, 2);
+      }
+      return;
+    }
+    if (p.cds.atk > 0 || p.dash) return;
+    this.basicAttack();
+    r.cur -= 1;
+    if (r.cur < 1) {
+      r.cur = 0;
+      r.empty = true;
+      this.addText(p.x, p.y - 46, r.def.empty, r.def.color, 20);
+      sfx.tired();
+      if (!this.save.seenTired) {
+        this.save.seenTired = true;
+        this.showToast(`${r.def.icon} ${r.def.name}${r.def.obj} 다 썼어요! 스페이스에서 손을 떼면 다시 채워져요`, 3.5);
+      }
+    }
   }
 
   // Space: how it attacks depends on the equipped weapon type (WEAPON_CATS in data.js).
@@ -333,28 +376,75 @@ export class Battle {
           this.hitEnemy(e, prm.mult, opts(fx, fy));
         }
         break;
-      default: // bow arrows and staff orbs fly; see updateMissiles
+      default: { // bow arrows and staff orbs fly; see updateMissiles
         if (prm.kind === 'arrow') sfx.bow();
         else sfx.magic();
+        const target = this.autoAim(prm.range, prm.aim);
+        const a = target ? Math.atan2(target.y - p.y, target.x - p.x) : p.faceAngle;
+        p.swingAngle = a;
+        this.lookAt(a);
+        const ax = Math.cos(a), ay = Math.sin(a);
         this.missiles.push({
-          kind: prm.kind, x: p.x + fx * 20, y: p.y + fy * 20, vx: fx * prm.speed, vy: fy * prm.speed,
+          kind: prm.kind, x: p.x + ax * 20, y: p.y + ay * 20, vx: ax * prm.speed, vy: ay * prm.speed, speed: prm.speed,
           life: prm.range / prm.speed, mult: prm.mult, crit: prm.crit, slow: prm.dur, kb: prm.kb, radius: prm.radius || 0,
+          target, turn: prm.turn || 0, pierce: prm.pierce || 0, hit: new Set(),
         });
+      }
     }
     if (this.tutorial) this.tutorial.attacks++;
   }
 
+  // Ranged aim assist: the enemy closest to where the hero is facing (within `cone` radians either
+  // side and `range`), or failing that the nearest one within AIM_NEAR in any direction.
+  autoAim(range, cone = 0) {
+    if (!cone) return null;
+    const p = this.player;
+    let best = null, bestScore = Infinity, near = null, nearD = AIM_NEAR;
+    for (const e of this.targets()) {
+      const dx = e.x - p.x, dy = e.y - p.y, d = Math.hypot(dx, dy);
+      if (d > range) continue;
+      if (d < nearD) { nearD = d; near = e; }
+      const off = Math.abs(angleDiff(Math.atan2(dy, dx), p.faceAngle));
+      if (off > cone) continue;
+      const score = off / cone + d / range; // prefer straight ahead, then closer
+      if (score < bestScore) { bestScore = score; best = e; }
+    }
+    return best || near;
+  }
+
+  // Turn the hero toward an angle (for aimed shots) without changing how it walks.
+  lookAt(a) {
+    const p = this.player;
+    p.faceAngle = a;
+    p.face.x = Math.cos(a);
+    p.face.y = Math.sin(a);
+  }
+
   updateMissiles(dt) {
     for (const m of this.missiles) {
+      if (m.turn && m.target && !m.target.dead) { // home in a little
+        const want = Math.atan2(m.target.y - m.y, m.target.x - m.x);
+        const cur = Math.atan2(m.vy, m.vx);
+        const d = angleDiff(want, cur);
+        const a = cur + Math.max(-m.turn * dt, Math.min(m.turn * dt, d));
+        m.vx = Math.cos(a) * m.speed;
+        m.vy = Math.sin(a) * m.speed;
+      }
       m.x += m.vx * dt;
       m.y += m.vy * dt;
       m.life -= dt;
-      const hit = this.enemies.find(e => !e.dead && e.spawnT <= 0 && dist2(m.x, m.y, e.x, e.y) < (e.r + 8) ** 2);
+      const hit = this.enemies.find(e => !e.dead && e.spawnT <= 0 && !m.hit.has(e) && dist2(m.x, m.y, e.x, e.y) < (e.r + 14) ** 2);
       if (m.kind === 'arrow') {
         if (hit) {
           const d = Math.hypot(m.vx, m.vy) || 1;
           this.hitEnemy(hit, m.mult, { kb: m.kb, kx: m.vx / d, ky: m.vy / d, crit: m.crit, slow: m.slow });
-          m.life = 0;
+          m.hit.add(hit);
+          if (m.pierce > 0) { // carry on to the next enemy
+            m.pierce--;
+            m.target = null;
+          } else {
+            m.life = 0;
+          }
         }
       } else if (hit || m.life <= 0) { // orb: bursts where it hits (or where it runs out)
         m.life = 0;
@@ -401,14 +491,14 @@ export class Battle {
     }
     if (id === 'hp') {
       if (p.hp >= this.stats.maxHp) { this.showToast('체력이 이미 가득해요'); sfx.denied(); return; }
-      const heal = Math.round(this.stats.maxHp * POTION_HEAL);
+      const heal = Math.round(this.stats.maxHp * POTION_HEAL * this.stats.potion);
       p.hp = Math.min(this.stats.maxHp, p.hp + heal);
       this.addText(p.x, p.y - 44, `+${heal}`, '#7dffa0', 26);
       this.burst(p.x, p.y, '#7dffa0', 14, 200);
       sfx.heal();
     } else {
       if (this.powerT > 3) { this.showToast('아직 힘의 물약 효과가 남아 있어요'); sfx.denied(); return; }
-      this.powerT = POWER_TIME;
+      this.powerT = POWER_TIME * this.stats.potion;
       this.banner('💪 힘이 솟아요!', '#ffb36b', 1.2, 40);
       this.burst(p.x, p.y, '#ff9f43', 16, 240);
       sfx.upgrade();
@@ -457,6 +547,8 @@ export class Battle {
   castFireball(prm) {
     const p = this.player;
     const n = prm.count;
+    const target = this.autoAim(620 * 0.85, 1.05); // same aim assist as ranged weapons
+    if (target) this.lookAt(Math.atan2(target.y - p.y, target.x - p.x));
     for (let i = 0; i < n; i++) {
       const a = p.faceAngle + (i - (n - 1) / 2) * 0.22;
       this.fireballs.push({
@@ -563,7 +655,7 @@ export class Battle {
     if (e.isStageBoss) {
       this.onBossDefeated(e);
       this.dropGem(e);
-      this.dropWeapon(e);
+      this.dropEquipment(e);
     }
   }
 
@@ -602,19 +694,19 @@ export class Battle {
   }
 
   // World bosses always drop a weapon, 대장 monsters sometimes; it goes straight into the bag.
-  dropWeapon(e) {
-    if (e.kind !== 'boss' && Math.random() >= ELITE_WEAPON_CHANCE) return;
-    const w = rollWeapon(this.save, this.stage.index, e.kind === 'boss');
-    this.save.weapons.push(w);
-    this.earned.weapons.push(w);
-    this.pickups.push({ type: 'weapon', weapon: w, x: e.x + 30, y: e.y, vx: 70, vy: -140, t: 0, value: 0 });
-    this.banner(`${WEAPON_CATS[w.cat].icon} ${weaponName(w)} 획득!`, GEM_GRADES[w.g].color, 3, 42);
+  dropEquipment(e) {
+    rollEquipment(this.save, this.stage, e.kind === 'boss').forEach((it, i) => {
+      (isWeapon(it) ? this.save.weapons : this.save.armors).push(it);
+      this.earned.items.push(it);
+      this.pickups.push({ type: 'item', item: it, x: e.x + 30 + i * 40, y: e.y, vx: 70 - i * 140, vy: -140, t: 0, value: 0 });
+      this.banner(`${itemIcon(it)} ${itemName(it)} Lv ${it.lv} 획득!`, GEM_GRADES[it.g].color, 3, 42);
+    });
     this.game.persist();
   }
 
   // Every stage-end boss (대장 or world boss) drops one gem; it goes straight into the bag.
   dropGem(e) {
-    const gem = rollGem(this.save, this.stage.world, e.kind === 'boss');
+    const gem = rollGem(this.save, this.stage.lootWorld, e.kind === 'boss');
     this.save.gems.push(gem);
     this.earned.gems.push(gem);
     this.pickups.push({ type: 'gem', gem, x: e.x, y: e.y, vx: 0, vy: -140, t: 0, value: 0 });
@@ -674,7 +766,7 @@ export class Battle {
     const p = this.player;
     if (this.state !== 'play' || p.inv > 0 || p.dash) return;
     const guard = this.buffs.def > 0 ? BUFF_DEF : 1;
-    const dmg = Math.max(1, Math.round(((raw * 100) / (100 + this.stats.def)) * guard));
+    const dmg = Math.max(1, Math.round(((raw * 100) / (100 + this.stats.def)) * guard * this.stats.damageTaken));
     p.hp -= dmg;
     p.inv = 0.8;
     this.shake = Math.max(this.shake, 0.18);
@@ -706,19 +798,21 @@ export class Battle {
       this.effects.push({ type: 'poof', x: e.x, y: e.y, r: e.r * 1.6, t: 0, dur: 0.35 });
     }
     this.shots = [];
-    const first = this.stage.index > this.save.cleared;
+    const tier = this.stage.tier;
+    const first = this.stage.index > this.save.cleared[tier];
     const bonus = Math.round(40 * this.stage.rewardMul * (first ? 2 : 1));
     this.save.gold += bonus;
     this.earned.gold += bonus;
     this.earned.clearBonus = bonus;
     this.earned.firstClear = first;
-    if (first) this.save.cleared = this.stage.index;
+    if (first) this.save.cleared[tier] = this.stage.index;
     this.game.persist();
   }
 
   result() {
     return {
       stageIndex: this.stage.index,
+      tier: this.stage.tier,
       cleared: this.state === 'clear',
       kills: this.kills,
       ...this.earned,
@@ -739,6 +833,7 @@ export class Battle {
     } else if (kind === 'minion') {
       hp *= 0.7; xp *= 0.5; gold *= 0.5;
     }
+    if (kind === 'elite' || kind === 'boss') hp *= SCALE.bossHp;
     const e = {
       id, def: d, kind, name, ai, x, y, size, r: size * 0.42,
       hp, maxHp: hp, dmg, speed, xp, gold,
@@ -1010,7 +1105,7 @@ export class Battle {
       k.t += dt;
       const dx = p.x - k.x, dy = p.y - k.y, d = Math.hypot(dx, dy) || 1;
       // nearby coins fly to the hero; leftovers come by themselves after a while
-      const loot = k.type === 'gem' || k.type === 'weapon';
+      const loot = k.type === 'gem' || k.type === 'item';
       const settle = loot ? 0.9 : 0.2; // let dropped loot float a moment so it's seen
       if ((k.t > 0.35 && d < 140 && !loot) || k.t > 6 || (allIn && k.t > settle)) {
         const sp = 300 + 900 / Math.max(0.3, d / 100);
@@ -1129,7 +1224,8 @@ export class Battle {
         ctx.ellipse(p.x, p.y + 20, 30, 11, 0, 0, TAU);
         ctx.fill();
       }
-      drawHero(ctx, p, this.save.gear, this.time, this.weapon);
+      drawHero(ctx, p, this.armor, this.time, this.weapon);
+      this.drawResourceBar(ctx, p);
     }
 
     this.drawFireballs(ctx);
@@ -1207,8 +1303,8 @@ export class Battle {
         ctx.fillRect(k.x - 2, k.y + bob - 4, 2, 5);
       } else if (k.type === 'gem') {
         drawGem(ctx, k.x, k.y + bob * 2, 16, GEM_GRADES[k.gem.g].color, this.time);
-      } else if (k.type === 'weapon') {
-        const color = GEM_GRADES[k.weapon.g].color;
+      } else if (k.type === 'item') {
+        const color = GEM_GRADES[k.item.g].color;
         ctx.save();
         ctx.shadowColor = color;
         ctx.shadowBlur = 16;
@@ -1218,11 +1314,23 @@ export class Battle {
         ctx.arc(k.x, k.y + bob * 2, 20, 0, TAU);
         ctx.stroke();
         ctx.restore();
-        drawSprite(ctx, emojiSprite(WEAPON_CATS[k.weapon.cat].icon, 26), k.x, k.y + bob * 2);
+        drawSprite(ctx, emojiSprite(itemIcon(k.item), 26), k.x, k.y + bob * 2);
       } else {
         drawSprite(ctx, emojiSprite('❤️', 22), k.x, k.y + bob);
       }
     }
+  }
+
+  // Small stamina / arrows / mana bar under the hero while it isn't full; blinks red when empty.
+  drawResourceBar(ctx, p) {
+    const r = this.res;
+    if (r.cur >= r.max) return;
+    const w = 46, h = 6, x = p.x - w / 2, y = p.y + 30;
+    ctx.fillStyle = 'rgba(0,0,0,.55)';
+    ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
+    const blink = r.empty && Math.floor(this.time * 6) % 2 === 0;
+    ctx.fillStyle = blink ? '#ff5c6c' : r.def.color;
+    ctx.fillRect(x, y, w * (r.cur / r.max), h);
   }
 
   drawMissiles(ctx) {

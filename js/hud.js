@@ -9,6 +9,7 @@ export function createHud(root, { onPause }) {
       <div class="hud-row"><span class="hud-lv"></span><span class="hud-gold"></span></div>
       <div class="bar hp"><i></i><span></span></div>
       <div class="bar xp"><i></i><span></span></div>
+      <div class="bar res"><i></i><span></span></div>
       <div class="hud-buffs"></div>
     </div>
     <div class="hud-stage glass">
@@ -45,6 +46,7 @@ export function createHud(root, { onPause }) {
     lv: $('.hud-lv'), gold: $('.hud-gold'),
     hpFill: $('.bar.hp i'), hpText: $('.bar.hp span'),
     xpFill: $('.bar.xp i'), xpText: $('.bar.xp span'),
+    res: $('.bar.res'), resFill: $('.bar.res i'), resText: $('.bar.res span'),
     stageTitle: $('.hud-stage-title'), stage: $('.hud-stage'),
     progFill: $('.bar.prog i'), progText: $('.bar.prog span'),
     hint: $('.hud-hint'), toast: $('.hud-toast'), buffs: $('.hud-buffs'),
@@ -79,6 +81,13 @@ export function createHud(root, { onPause }) {
       set('xpW', max ? '100' : ((s.xp / need) * 100).toFixed(1), v => (el.xpFill.style.width = v + '%'));
       set('xpT', max ? 'MAX' : `EXP ${fmtNum(s.xp)} / ${fmtNum(need)}`, v => (el.xpText.textContent = v));
 
+      const r = b.res; // stamina / arrows / mana
+      set('resColor', r.def.color, v => el.res.style.setProperty('--rc', v));
+      set('resW', ((r.cur / r.max) * 100).toFixed(1), v => (el.resFill.style.width = v + '%'));
+      const count = r.def.count ? ` ${Math.floor(r.cur)} / ${r.max}` : '';
+      set('resT', `${r.def.icon} ${r.def.name}${count}${r.empty ? ' · 손을 떼면 채워져요' : ''}`, v => (el.resText.textContent = v));
+      set('resEmpty', r.empty, v => el.res.classList.toggle('empty', v));
+
       let title, prog, progText, bossMode;
       const boss = b.boss && !b.boss.dead ? b.boss : null;
       if (boss) {
@@ -87,7 +96,7 @@ export function createHud(root, { onPause }) {
         progText = `${fmtNum(Math.max(0, boss.hp))} / ${fmtNum(boss.maxHp)}`;
         bossMode = true;
       } else {
-        title = `${b.stage.label}  ${b.world.name}`;
+        title = `${b.stage.fullLabel}  ${b.world.name}`;
         const goal = b.stage.killGoal;
         prog = Math.min(1, b.kills / goal);
         progText = b.state === 'clear' ? '클리어!' : b.kills >= goal ? '대장 몬스터가 와요!' : `몬스터 ${b.kills} / ${goal}`;

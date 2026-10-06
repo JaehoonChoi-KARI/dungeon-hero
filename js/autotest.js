@@ -3,11 +3,9 @@
 //   ?shot=battle   → freezes a scene for a screenshot (title, town, stages, smithy, skills, guide, battle, intro, result)
 
 import { defaultSave, writeSlot, deleteSlot, listSlots, loadSlot, migrateLegacySave } from './save.js';
-import { GEM_STATS, makeGem, rollGem, gemMods } from './gems.js';
-import { skillParams, weaponUpCost, WEAPON_ORDER } from './data.js';
-import { makeWeapon, weaponLevelMul } from './weapons.js';
-
-const GEAR_COST_30 = weaponUpCost(30);
+import { GEM_STATS, ARMOR_STATS, makeGem, rollGem, gemMods } from './gems.js';
+import { skillParams, WEAPON_ORDER, WEAPON_CATS, UP_LIMIT, upCost, itemLevel, weaponPower, levelMul, STAGE_COUNT, resourceMax, computeStats } from './data.js';
+import { makeWeapon, makeArmor, WEAPON_ROLLS, ARMOR_HP_ROLLS } from './items.js';
 
 // Gives a save one gem of every grade and fills a few sockets.
 function withGems(save) {
@@ -22,16 +20,18 @@ function withGems(save) {
 
 const ARROWS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
 
+// A hero with 전설 gear found at item level `gearLv` and enhanced to its +5 limit.
 function strongSave(level, gearLv, cat = 'sword') {
   const s = defaultSave();
   s.level = level;
   s.gold = 5000;
   s.sp = 3;
-  s.cleared = 12;
+  s.cleared = [12, -1, -1];
   s.tutorialDone = true;
   s.skills = { atk: 3, q: 3, w: 2, e: 3, r: 2, hp: 2, str: 2 };
-  s.gear = { armor: gearLv, boots: Math.min(10, gearLv), ring: Math.min(15, gearLv) };
-  Object.assign(s.weapons[0], { cat, up: gearLv });
+  s.gear = { boots: Math.min(10, gearLv), ring: Math.min(15, gearLv) };
+  s.weapons = [{ ...makeWeapon(1, cat, 3, Math.max(1, gearLv)), up: UP_LIMIT }];
+  s.armors = [{ ...makeArmor(1, 3, Math.max(1, gearLv)), up: UP_LIMIT }];
   s.potions = { hp: 3, atk: 2 };
   return s;
 }
@@ -53,7 +53,9 @@ function drive(input, b) {
     if (dy < -8) input.simulateDown('ArrowUp');
     if (dy > 8) input.simulateDown('ArrowDown');
   }
-  input.simulateDown('Space');
+  // like a kid: let go of Space when stamina/arrows/mana run out, press again once it's full
+  if (b.res && b.res.empty) input.simulateUp('Space');
+  else input.simulateDown('Space');
   for (const k of ['KeyQ', 'KeyW', 'KeyE', 'KeyR']) {
     input.simulateUp(k);
     if (Math.random() < 0.03) input.simulateDown(k);
@@ -229,12 +231,15 @@ function economyTest(env) {
   key('Escape');
   key('Escape');
 
-  // weapon past the old cap of 30
-  s.weapons[0].up = 30;
-  s.gold = 100000;
+  // the equipped weapon goes up one item level per step, and stops at +5
+  s.weapons[0].up = UP_LIMIT - 1;
+  s.gold = 1000000;
+  const lv0 = itemLevel(s.weapons[0]), cost = upCost(s.weapons[0]);
   game.show('smithy');
   key('Enter');
-  r.transcend = s.weapons[0].up === 31 && s.gold === 100000 - GEAR_COST_30;
+  const stepped = s.weapons[0].up === UP_LIMIT && itemLevel(s.weapons[0]) === lv0 + 1 && s.gold === 1000000 - cost;
+  key('Enter'); // already +5: nothing happens
+  r.upgradeCapped = stepped && s.weapons[0].up === UP_LIMIT && s.gold === 1000000 - cost;
 
   // potion shop: one of each
   s.gold = 5000;
@@ -259,6 +264,144 @@ function economyTest(env) {
   input.endFrame();
   input.simulateUp('Digit2');
   r.drank = b.player.hp > 10 && b.powerT > 0 && s.potions.hp === 0 && s.potions.atk === 0;
+  game.quitToTown();
+  return r;
+}
+
+// Armor bonus effects (roll rules + what they do) and armor gem sockets (half to every attack).
+function armorTest(env) {
+  const { game, input } = env;
+  const key = code => game.screen.onKey(code, false);
+  const r = {};
+  const bad = [];
+  for (let i = 0; i < 2000; i++) {
+    const g = i % 5;
+    const a = makeArmor(i, g, 10);
+    if (a.fx.length !== (g === 0 ? 0 : g >= 3 ? 2 : 1)) bad.push(`fx count g${g}`);
+    for (const f of a.fx) if (!(f.s in ARMOR_STATS)) bad.push('not an armor stat');
+    if (a.fx.length === 2 && a.fx[0].s === a.fx[1].s) bad.push('same stat twice');
+    if (!Array.isArray(a.sockets) || a.sockets.length !== 3) bad.push('sockets');
+  }
+  r.rollRules = bad.length ? [...new Set(bad)] : 'ok';
+
+  // effects: damage taken, max HP, refill speed, potion strength
+  const plain = strongSave(10, 5);
+  plain.armors[0].fx = [];
+  const geared = JSON.parse(JSON.stringify(plain)); // same armor roll, only the effects differ
+  geared.armors[0].fx = [{ s: 'dr', v: 10 }, { s: 'hp', v: 20 }];
+  const sp = computeStats(plain), sg = computeStats(geared);
+  r.damageTaken = sg.damageTaken; // 0.9
+  r.hpRatio = +(sg.maxHp / sp.maxHp).toFixed(2); // 1.2
+  const refillTime = fx => {
+    const s = strongSave(10, 5, 'bow');
+    s.armors[0].fx = fx;
+    game.save = s;
+    game.startStage(3);
+    const b = game.battle;
+    b.enemies = [];
+    b.spawned = 999;
+    b.res.cur = 0;
+    b.res.empty = true;
+    let t = 0;
+    while (b.res.empty && t < 5) { b.update(1 / 60); input.endFrame(); t += 1 / 60; }
+    game.quitToTown();
+    return t;
+  };
+  r.refillPlain = +refillTime([]).toFixed(2);
+  r.refillRegen50 = +refillTime([{ s: 'regen', v: 50 }]).toFixed(2); // faster
+
+  // gem in the armor: half of it reaches every skill and Space
+  const s = strongSave(10, 5);
+  s.gems.push({ id: 1, g: 2, fx: [{ s: 'dmg', v: 20 }] });
+  s.armors[0].sockets = [1, 0, 0];
+  const m = gemMods(s);
+  r.armorGemHalf = Math.abs(m.q.dmg - 0.1) < 1e-9 && Math.abs(m.atk.dmg - 0.1) < 1e-9;
+
+  // gem menu: the last row is the armor; put a gem in it
+  const t = strongSave(10, 5);
+  t.gems.push({ id: 1, g: 2, fx: [{ s: 'crit', v: 6 }] });
+  game.save = t;
+  game.show('gems');
+  key('ArrowUp'); // wraps to the armor row
+  key('Enter');
+  key('Enter');
+  r.socketedInArmor = t.armors[0].sockets[0] === 1;
+  key('Escape');
+  return r;
+}
+
+// Ranged hit rate the way a person plays: target 220–370px away moving sideways, hero facing
+// the nearest of the 8 keyboard directions. Compared with the aim assist switched off.
+function aimTest(env) {
+  const { game } = env;
+  const out = {};
+  for (const cat of ['bow', 'staff']) {
+    for (const assist of [false, true]) {
+      const A = WEAPON_CATS[cat].attack;
+      const saved = { aim: A.aim, turn: A.turn, pierce: A.pierce };
+      if (!assist) Object.assign(A, { aim: 0, turn: 0, pierce: 0 });
+      game.save = strongSave(10, 5, cat);
+      game.startStage(3);
+      const b = game.battle, p = b.player;
+      b.spawned = 999;
+      let hits = 0;
+      const TRIALS = 200;
+      for (let t = 0; t < TRIALS; t++) {
+        b.enemies = [];
+        b.missiles = [];
+        p.x = 1200;
+        p.y = 800;
+        const ang = Math.random() * Math.PI * 2, dist = 220 + Math.random() * 150;
+        const e = b.makeEnemy('rat', p.x + Math.cos(ang) * dist, p.y + Math.sin(ang) * dist);
+        Object.assign(e, { spawnT: 0, hp: 1e9, maxHp: 1e9 });
+        const side = (Math.random() < 0.5 ? 1 : -1) * 90; // px/s sideways
+        const q = Math.round(ang / (Math.PI / 4)) * (Math.PI / 4);
+        Object.assign(p, { faceAngle: q, face: { x: Math.cos(q), y: Math.sin(q) } });
+        p.cds.atk = 0;
+        b.res.cur = b.res.max;
+        b.basicAttack();
+        for (let k = 0; k < 60; k++) {
+          e.x += (-Math.sin(ang) * side) / 60;
+          e.y += (Math.cos(ang) * side) / 60;
+          b.updateMissiles(1 / 60);
+        }
+        if (e.hp < 1e9) hits++;
+      }
+      Object.assign(A, saved);
+      out[assist ? cat : `${cat}_before`] = `${Math.round((hits / TRIALS) * 100)}%`;
+      game.quitToTown();
+    }
+  }
+  return out;
+}
+
+// Space resource: units per weapon, spending, no refill while held, lock until full, refill time.
+function resourceTest(env) {
+  const { game, input } = env;
+  const r = { units: {} };
+  for (const cat of WEAPON_ORDER) r.units[cat] = resourceMax(cat);
+  game.save = strongSave(10, 5, 'bow');
+  game.startStage(3);
+  const b = game.battle;
+  b.enemies = [];
+  b.spawned = 999; // nothing to fight; we only watch the arrows
+  const step = n => { for (let i = 0; i < n; i++) { b.update(1 / 60); input.endFrame(); } };
+  let shots = 0;
+  const count = () => { shots = b.missiles.length + shots; b.missiles = []; };
+  input.simulateDown('Space');
+  for (let i = 0; i < 60 * 8; i++) { step(1); count(); } // hold for 8s
+  r.arrowsShot = shots; // = max, then locked
+  r.emptyWhileHeld = b.res.empty && b.res.cur === 0;
+  input.simulateUp('Space');
+  let t = 0;
+  while (b.res.empty && t < 5) { step(1); t += 1 / 60; }
+  r.refillSec = +t.toFixed(2); // ≈ RES_DELAY + RES_REFILL
+  r.fullAgain = !b.res.empty && b.res.cur === b.res.max;
+  input.simulateDown('Space');
+  step(2);
+  count();
+  r.shootsAgain = shots > r.arrowsShot;
+  input.simulateUp('Space');
   game.quitToTown();
   return r;
 }
@@ -310,43 +453,52 @@ function dropTest(env) {
   return r;
 }
 
-// Weapons: roll rules, every weapon type clearing a stage, the weapon menu, drops, old-save upgrade.
+// Gear items: roll rules, the use-by-date math, every weapon type clearing a stage, boss drops,
+// the equipment menu, difficulty tiers, and upgrading v1 saves.
 function weaponTest(env) {
   const { game } = env;
   const key = code => game.screen.onKey(code, false);
   const r = {};
 
-  const ranges = [[4, 7], [7, 11], [11, 16], [16, 22], [22, 30]];
   const bad = [];
   for (let i = 0; i < 3000; i++) {
-    const g = i % 5, lv = 1 + (i % 25);
+    const g = i % 5, lv = 1 + (i % 75);
     const w = makeWeapon(i, WEAPON_ORDER[i % 6], g, lv);
-    const k = weaponLevelMul(lv);
-    if (w.atk < Math.round(ranges[g][0] * k) || w.atk > Math.round(ranges[g][1] * k)) bad.push('atk range');
+    const a = makeArmor(i, g, lv);
+    if (w.roll < WEAPON_ROLLS[g][0] || w.roll > WEAPON_ROLLS[g][1]) bad.push('weapon roll');
+    if (a.hpRoll < ARMOR_HP_ROLLS[g][0] || a.hpRoll > ARMOR_HP_ROLLS[g][1]) bad.push('armor roll');
     if (w.fx.length !== (g === 0 ? 0 : g >= 3 ? 2 : 1)) bad.push(`fx count g${g}`);
   }
   r.rollRules = bad.length ? [...new Set(bad)] : 'ok';
 
+  // use-by date: an average 신화 at Lv 10 (+5 = 15) vs. an average 전설 found 5 levels later (+5 = 20)
+  const avg = g => (WEAPON_ROLLS[g][0] + WEAPON_ROLLS[g][1]) / 2;
+  r.mythLv15 = Math.round(avg(4) * levelMul(15));
+  r.legendLv20 = Math.round(avg(3) * levelMul(20));
+  r.epicLv25 = Math.round(avg(2) * levelMul(25));
+
   // each weapon type must be able to clear a stage on its own attack style
   r.byType = {};
   for (const cat of WEAPON_ORDER) {
-    const res = simulate(env, 7, strongSave(11, 11, cat), 240);
+    const res = simulate(env, 7, strongSave(11, 8, cat), 240);
     r.byType[cat] = `${res.state} ${res.simSeconds}s`;
   }
 
-  // world boss always drops a weapon
-  const s = strongSave(16, 12);
-  const before = s.weapons.length;
+  // world boss drops one weapon and one armor at the stage's item level
+  const s = strongSave(16, 10);
+  const wb = s.weapons.length, ab = s.armors.length;
   simulate(env, 9, s, 300);
-  r.bossDropsWeapon = s.weapons.length === before + 1;
+  r.bossDropsGear = s.weapons.length === wb + 1 && s.armors.length === ab + 1 && s.weapons.at(-1).lv === 10 && s.armors.at(-1).lv === 10;
 
-  // weapon menu: equip the other weapon, then sell the old one (its gem goes back to the bag)
+  // equipment menu: equip the other weapon, sell the old one (its gem goes back), then the armor tab
   const t = strongSave(12, 5);
   t.gems.push(makeGem(t.nextGemId++, 2));
   t.weapons[0].sockets = [1, 0, 0];
+  t.weapons[0].g = 0; // make the bow the stronger one
   t.weapons.push(makeWeapon(t.nextWeaponId++, 'bow', 3, 10));
+  t.armors.push(makeArmor(t.nextArmorId++, 4, 12));
   game.save = t;
-  game.show('weapons');
+  game.show('equip');
   key('ArrowDown');
   key('Enter');
   r.equipped = t.weaponId === 2;
@@ -355,18 +507,52 @@ function weaponTest(env) {
   key('KeyX');
   key('ArrowDown');
   key('Enter');
-  r.sold = t.weapons.length === 1 && t.gold > gold && gemMods(t).atk !== undefined && t.gems.length === 1;
+  r.sold = t.weapons.length === 1 && t.gold > gold && t.gems.length === 1;
+  key('ArrowRight'); // armor tab
+  const onArmorTab = !!game.screen && document.querySelector('.tier-tab.on')?.dataset.k === 'armor';
+  key('ArrowDown');
+  key('Enter');
+  r.armorTab = onArmorTab && t.armorId === 2;
   key('Escape');
 
-  // saves from before weapon items: Space sockets and weapon level move onto the starter sword
+  // difficulty: clearing 보통 5-5 opens 어려움; Tab switches to it; its stages use the higher numbers
+  const u = strongSave(30, 26);
+  u.cleared = [STAGE_COUNT - 1, -1, -1];
+  game.save = u;
+  game.stageTier = 0;
+  game.show('stages');
+  key('Tab');
+  key('Enter'); // first stage of 어려움
+  const b = game.battle;
+  r.hardTier = !!b && b.stage.tier === 1 && b.stage.e === 25 && b.stage.itemLevel === 26;
+  if (game.battle) game.quitToTown();
+  game.stageTier = 0;
+
+  // v1.1-style save: town weapon/armor levels, Space gems → starter sword (+5 max, rest refunded) and an armor item
   const old = defaultSave();
   delete old.weapons;
-  old.gear = { weapon: 12, armor: 3, boots: 0, ring: 0 };
+  delete old.armors;
+  old.v = 1;
+  old.cleared = 7;
+  old.gear = { weapon: 12, armor: 8, boots: 2, ring: 1 };
   old.gems = [makeGem(1, 1)];
   old.sockets = { atk: [1, 0, 0], q: [0, 0, 0], w: [0, 0, 0], e: [0, 0, 0], r: [0, 0, 0] };
   localStorage.setItem('dungeonHero.test.slot.3', JSON.stringify(old));
-  const up = loadSlot(3);
-  r.oldSaveUpgraded = up.weapons.length === 1 && up.weapons[0].up === 12 && up.weapons[0].sockets[0] === 1;
+  let up = loadSlot(3);
+  r.v11Upgraded = up.weapons[0].up === UP_LIMIT && up.weapons[0].sockets[0] === 1 && up.refund > 0 && up.gold === up.refund
+    && up.armors[0].lv === 8 && up.armors[0].up === UP_LIMIT && up.cleared[0] === 7 && up.gear.boots === 2;
+
+  // v1.3-style save: weapon items with a fixed attack and big enhancement
+  const v13 = defaultSave();
+  delete v13.armors;
+  v13.v = 1;
+  v13.cleared = 20;
+  v13.gold = 100;
+  v13.weapons = [{ id: 1, cat: 'bow', g: 3, lv: 10, atk: 40, up: 9, fx: [{ s: 'dmg', v: 25 }], sockets: [0, 0, 0] }];
+  localStorage.setItem('dungeonHero.test.slot.3', JSON.stringify(v13));
+  up = loadSlot(3);
+  const w = up.weapons[0];
+  r.v13Upgraded = w.up === UP_LIMIT && w.roll >= WEAPON_ROLLS[3][0] && w.roll <= WEAPON_ROLLS[3][1] && !('atk' in w) && up.gold > 100;
   deleteSlot(3);
   return r;
 }
@@ -469,6 +655,9 @@ export function run(env) {
     log.push(economyTest(env));
     log.push(weaponTest(env));
     log.push(dropTest(env));
+    log.push(resourceTest(env));
+    log.push(aimTest(env));
+    log.push(armorTest(env));
   } catch (e) {
     errors.push(e.stack || String(e));
   }
@@ -545,6 +734,14 @@ function setupShot(env, shot) {
       game.screen.onKey('KeyF', false);
       break;
     }
+    case 'resource': { // bow with a few arrows left, and the HUD bar
+      fight(3, strongSave(8, 6, env.params.get('cat') || 'bow'), 4);
+      const b = game.battle;
+      b.res.cur = Math.max(1, Math.round(b.res.max * 0.3));
+      b.res.empty = false;
+      freeze();
+      break;
+    }
     case 'buffs': {
       fight(3, strongSave(8, 6), 5);
       const b = game.battle, p = b.player;
@@ -556,16 +753,27 @@ function setupShot(env, shot) {
       freeze();
       break;
     }
-    case 'weapons': {
+    case 'equip':
+    case 'equip-armor': {
       const s = withGems(strongSave(12, 7));
-      s.weapons[0].up = 7;
-      s.weapons.push(makeWeapon(s.nextWeaponId++, 'hammer', 4, 12), makeWeapon(s.nextWeaponId++, 'bow', 2, 8),
-        makeWeapon(s.nextWeaponId++, 'staff', 3, 11), makeWeapon(s.nextWeaponId++, 'dagger', 1, 5), makeWeapon(s.nextWeaponId++, 'spear', 0, 9));
+      s.weapons[0].up = 3;
+      s.weapons.push(makeWeapon(s.nextWeaponId++, 'hammer', 4, 6), makeWeapon(s.nextWeaponId++, 'bow', 2, 14),
+        makeWeapon(s.nextWeaponId++, 'staff', 3, 11), makeWeapon(s.nextWeaponId++, 'dagger', 1, 5), makeWeapon(s.nextWeaponId++, 'spear', 0, 13));
+      s.armors.push(makeArmor(s.nextArmorId++, 2, 16), makeArmor(s.nextArmorId++, 4, 4), makeArmor(s.nextArmorId++, 1, 30));
       s.weaponSeenId = 3;
+      s.armorSeenId = 1;
       game.save = s;
       game.slot = 1;
-      game.show('weapons');
+      game.show('equip', { tab: shot === 'equip' ? 'weapon' : 'armor' });
       game.screen.onKey('ArrowDown', false);
+      break;
+    }
+    case 'stages-hard': {
+      const s = strongSave(34, 28);
+      s.cleared = [STAGE_COUNT - 1, 6, -1];
+      game.save = s;
+      game.stageTier = 1;
+      game.show('stages');
       break;
     }
     case 'potions': {
@@ -595,7 +803,7 @@ function setupShot(env, shot) {
       break;
     case 'slots': {
       const a = strongSave(12, 7);
-      a.cleared = 13;
+      a.cleared = [STAGE_COUNT - 1, 3, -1];
       writeSlot(1, a);
       writeSlot(2, strongSave(3, 0));
       deleteSlot(3);
